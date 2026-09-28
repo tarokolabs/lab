@@ -158,6 +158,20 @@ def build(cfg: Config, pve, *, k8s: str | None, node: str | None, log=print) -> 
         if "already exists" in str(e):
             log(f"VM {vmid} exists; delete it (or pick another pve.template) before rebuilding")
             return 1
+        if e.status == 403:
+            # PVE drops every ACL on /vms/<id> when that VM is destroyed, so this is what a
+            # rebuild after deleting the old template looks like.
+            log(f"{e}")
+            log(
+                f"PVE removed the ACLs on /vms/{vmid} when the old template was deleted; "
+                "as a PVE administrator run the grant lines from `tkctl lab init` again:"
+            )
+            for role, token in (
+                ("TkctlLabTemplateUse", "lab@pve!tkctl"),
+                ("TkctlLabTemplateBuild", "lab@pve!tkctl-build"),
+            ):
+                log(f"  grant /vms/{vmid} {role} '{token}'")
+            return 1
         raise
     pve.wait_task(upid, timeout=IMPORT_TIMEOUT)
     resize = pve.resize(node, vmid, "scsi0", cfg.vm.disk)

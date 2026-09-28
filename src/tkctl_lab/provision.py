@@ -99,9 +99,9 @@ class _Cloner:
 class _Class:
     """Everything one create() run shares: config, clients, node choice, template facts."""
 
-    def __init__(self, cd: ClassDef, cfg: Config, pve, guac, log, sleep=time.sleep):
+    def __init__(self, cd: ClassDef, cfg: Config, pve, guac, log, sleep=None):
         self.cd, self.cfg, self.pve, self.guac, self.log = cd, cfg, pve, guac, log
-        self.sleep = sleep
+        self.sleep = sleep or time.sleep  # resolved late so tests can patch time.sleep
         self.group_id = guac.ensure_group(cd.name)
         template_node = pve.vm_node(cfg.pve.template)
         self.cloner = _Cloner(cfg, pve, template_node)

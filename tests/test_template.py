@@ -20,6 +20,8 @@ def test_user_data_installs_desktop_tk8s_and_prepulls_image():
     assert "set -e" in ud and template.BUILD_OK in ud
     assert f"condition: test -f {template.BUILD_OK}" in ud
     assert "cloud-init clean --logs --machine-id" in ud
+    # a fresh cloud image boots with ip_forward=0 and node netns inherit that at creation
+    assert "net.ipv4.ip_forward = 1" in ud and "/etc/sysctl.d/80-tkctl-lab.conf" in ud
     assert "systemctl disable lightdm" in ud
 
 

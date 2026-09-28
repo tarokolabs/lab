@@ -48,6 +48,10 @@ users:
 write_files:
   - path: /etc/ssh/sshd_config.d/00-lab.conf
     content: "PasswordAuthentication yes\\n"
+  - path: /etc/sysctl.d/80-tkctl-lab.conf
+    # node network namespaces copy the host's IPv4 forwarding flag when they are created,
+    # and a fresh cloud image boots with it off; kubeadm's preflight then fails inside the node
+    content: "net.ipv4.ip_forward = 1\\n"
   - path: /home/student/.xsession
     owner: student:student
     defer: true

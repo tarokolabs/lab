@@ -10,56 +10,77 @@ from datetime import date
 from pathlib import Path
 
 from . import __version__, classdef, config, provision, roster
-from .guac import Guac
-from .pve import Pve
+from .guac import Guac, GuacError
+from .pve import Pve, PveError
 
-# Least privilege: the role only carries what create/destroy/describe call, and it is bound to
-# the lab pool, the template VM, the one storage and the bridge. Sys.Audit on /nodes is read-only
-# and lets `node = "auto"` see node memory. Both the user and the token get the same ACLs because
-# the token is privilege-separated.
-PVE_ROLE_PRIVS = " ".join(
-    [
-        "VM.Allocate",
-        "VM.Clone",
+# Least privilege. Two tokens on one user: the class token can clone the template and manage
+# VMs in the lab pool only; the build token, used by `create template` alone, may also write
+# images to the storage and make the node fetch a URL. Nothing is granted on /, /vms or /nodes
+# for VMs, so VMs outside the pool stay out of reach. Both the user and each token need the
+# ACLs because the tokens are privilege-separated.
+ROLES = {
+    "TkctlLabClass": [
         "VM.Audit",
-        "VM.Monitor",
-        "VM.GuestAgent.Audit",
+        "VM.Allocate",
         "VM.PowerMgmt",
-        "VM.Config.CDROM",
         "VM.Config.CPU",
+        "VM.Config.Memory",
+        "VM.Config.Options",
+        "VM.Config.Cloudinit",
+        "VM.Config.Disk",
+        "VM.GuestAgent.Audit",
+    ],
+    "TkctlLabTemplateUse": ["VM.Audit", "VM.Clone"],
+    "TkctlLabTemplateBuild": [
+        "VM.Audit",
+        "VM.Allocate",
+        "VM.PowerMgmt",
+        "VM.Config.CPU",
+        "VM.Config.Memory",
+        "VM.Config.Options",
         "VM.Config.Cloudinit",
         "VM.Config.Disk",
         "VM.Config.HWType",
-        "VM.Config.Memory",
         "VM.Config.Network",
-        "VM.Config.Options",
-        "Datastore.AllocateSpace",
-        "Datastore.AllocateTemplate",
-        "Datastore.Audit",
-        "SDN.Use",
-        "Pool.Audit",
-    ]
-)
+    ],
+    "TkctlLabDisk": ["Datastore.AllocateSpace", "Datastore.Audit"],
+    "TkctlLabImage": ["Datastore.AllocateSpace", "Datastore.AllocateTemplate", "Datastore.Audit"],
+    "TkctlLabBridge": ["SDN.Use"],
+    "TkctlLabFetch": ["Sys.AccessNetwork"],
+}
 PVE_SETUP = """# Run once as a PVE administrator.
-pveum role add TkctlLab -privs "{privs}"
-pveum role add TkctlLabAudit -privs "Sys.Audit"
+{roles}
 pveum user add lab@pve --comment "tkctl lab service account"
 pveum pool add {pool} --comment "tkctl lab classes"
-pveum user token add lab@pve tkctl --privsep 1
-for who in "-user lab@pve" "-token lab@pve!tkctl"; do
-  pveum acl modify /pool/{pool} $who -role TkctlLab
-  pveum acl modify /vms/{template} $who -role TkctlLab
-  pveum acl modify /storage/{storage} $who -role TkctlLab
-  pveum acl modify /sdn/zones/localnetwork/{bridge} $who -role TkctlLab
-  pveum acl modify /nodes $who -role TkctlLabAudit
-done
-# export {token_env}=<the secret printed by `pveum user token add`>
+pveum user token add lab@pve tkctl --privsep 1        # -> {token_env}
+pveum user token add lab@pve tkctl-build --privsep 1  # -> {build_env}
+grant() {{  # path role token: the user and the privilege-separated token both need the ACL
+  pveum acl modify "$1" -user lab@pve -role "$2"
+  pveum acl modify "$1" -token "$3" -role "$2"
+}}
+grant /pool/{pool} TkctlLabClass 'lab@pve!tkctl'
+grant /vms/{template} TkctlLabTemplateUse 'lab@pve!tkctl'
+grant /storage/{storage} TkctlLabDisk 'lab@pve!tkctl'
+grant /sdn/zones/localnetwork/{bridge} TkctlLabBridge 'lab@pve!tkctl'
+grant /vms/{template} TkctlLabTemplateBuild 'lab@pve!tkctl-build'
+grant /storage/{storage} TkctlLabImage 'lab@pve!tkctl-build'
+grant /sdn/zones/localnetwork/{bridge} TkctlLabBridge 'lab@pve!tkctl-build'
+grant /nodes/{build_node} TkctlLabFetch 'lab@pve!tkctl-build'
 """
+
+
+def _role_lines() -> str:
+    return "\n".join(f'pveum role add {r} -privs "{" ".join(p)}"' for r, p in ROLES.items())
 
 
 def _clients(cfg: config.Config, sec: config.Secrets):
     pve = Pve(cfg.pve.url, cfg.pve.token_id, sec.pve_token, ca_file=cfg.pve.ca_file)
     return pve, Guac(cfg.guacamole.url, cfg.guacamole.username, sec.guac_password)
+
+
+def _build_client(cfg: config.Config, token: str):
+    token_id = cfg.pve.build_token_id or cfg.pve.token_id
+    return Pve(cfg.pve.url, token_id, token, ca_file=cfg.pve.ca_file)
 
 
 def _fail(msg: str, rc: int = 2) -> int:
@@ -112,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--parallel", type=int, default=5, help="students provisioned at once")
     t = create_nouns.add_parser("template", help="build the node template from the cloud image")
     t.add_argument("--k8s", help="Kubernetes version of the node image to pre-pull")
+    t.add_argument("--node", help="PVE node to build on (required when pve.node is auto)")
 
     get = verbs.add_parser("get", help="list classes")
     get.add_subparsers(dest="noun", required=True).add_parser("classes").add_argument(
@@ -148,14 +170,17 @@ def _init() -> int:
         pve = tomllib.loads(p.read_text()).get("pve", {})
     except tomllib.TOMLDecodeError, OSError:
         pve = {}
+    node = pve.get("node", "auto")
     print(
         PVE_SETUP.format(
-            privs=PVE_ROLE_PRIVS,
+            roles=_role_lines(),
             pool=pve.get("pool", "lab"),
             template=pve.get("template", 3900),
             storage=pve.get("storage", "nas-nfs"),
             bridge=pve.get("bridge", "vmbr0"),
+            build_node=node if node != "auto" else "<node given to create template --node>",
             token_env=config.PVE_TOKEN_ENV,
+            build_env=config.PVE_BUILD_TOKEN_ENV,
         ),
         end="",
     )
@@ -187,7 +212,10 @@ def _create_class(args, cfg, pve, guac) -> int:
             )
     except classdef.ClassDefError as e:
         return _fail(str(e))
-    entries = provision.create(cd, cfg, pve, guac, parallel=args.parallel)
+    try:
+        entries = provision.create(cd, cfg, pve, guac, parallel=args.parallel)
+    except provision.ProvisionError as e:
+        return _fail(str(e), 1)
     _print_roster(entries)
     print(f"roster: {roster.path(cd.name)}")
     return 1 if any(e.error for e in entries) else 0
@@ -248,23 +276,16 @@ def _delete_class(args, cfg, pve, guac) -> int:
     return rc
 
 
-def main(argv: list[str] | None = None, *, make_clients=None) -> int:
-    args = build_parser().parse_args(argv)
-    if args.verb == "init":
-        return _init()
-    try:
-        cfg = config.load()
-        sec = config.secrets()
-    except config.ConfigError as e:
-        return _fail(str(e))
-    pve, guac = (make_clients or _clients)(cfg, sec)
-
-    if args.verb == "create" and args.noun == "class":
-        return _create_class(args, cfg, pve, guac)
+def _dispatch(args, *, make_clients, make_build_client) -> int:
+    cfg = config.load()
     if args.verb == "create" and args.noun == "template":
         from . import template
 
-        return template.build(cfg, pve, k8s=args.k8s)
+        pve = (make_build_client or _build_client)(cfg, config.build_secret())
+        return template.build(cfg, pve, k8s=args.k8s, node=args.node)
+    pve, guac = (make_clients or _clients)(cfg, config.secrets())
+    if args.verb == "create":
+        return _create_class(args, cfg, pve, guac)
     if args.verb == "get":
         return _get_classes(args, cfg, pve)
     if args.verb == "describe":
@@ -272,3 +293,15 @@ def main(argv: list[str] | None = None, *, make_clients=None) -> int:
     if args.verb == "delete":
         return _delete_class(args, cfg, pve, guac)
     return 2
+
+
+def main(argv: list[str] | None = None, *, make_clients=None, make_build_client=None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.verb == "init":
+        return _init()
+    try:
+        return _dispatch(args, make_clients=make_clients, make_build_client=make_build_client)
+    except config.ConfigError as e:
+        return _fail(str(e))
+    except (PveError, GuacError) as e:
+        return _fail(str(e), 1)

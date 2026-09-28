@@ -8,6 +8,7 @@ GOOD = """
 [pve]
 url = "https://pve-node1:8006"
 token_id = "lab@pve!tkctl"
+build_token_id = "lab@pve!tkctl-build"
 node = "pve-node7"
 pool = "lab"
 storage = "nas-nfs"
@@ -97,3 +98,14 @@ def test_init_template_loads(tmp_path):
     # The generated example must itself be a valid config once the placeholders are kept.
     cfg = config.load(write(tmp_path, config.INIT_TEMPLATE))
     assert cfg.pve.pool == "lab"
+
+
+def test_build_token_id_is_optional_and_read(tmp_path):
+    p = tmp_path / "lab.toml"
+    p.write_text(GOOD)
+    assert config.load(p).pve.build_token_id == "lab@pve!tkctl-build"
+    p.write_text(GOOD.replace('build_token_id = "lab@pve!tkctl-build"', ""))
+    assert config.load(p).pve.build_token_id is None
+    with pytest.raises(config.ConfigError, match="TK_LAB_PVE_BUILD_TOKEN"):
+        config.build_secret({})
+    assert config.build_secret({"TK_LAB_PVE_BUILD_TOKEN": "x"}) == "x"

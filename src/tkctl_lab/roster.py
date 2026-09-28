@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import config
 
-FIELDS = ("student", "vmid", "node", "ip", "guac_user", "guac_password", "error")
+FIELDS = ("student", "vmid", "node", "ip", "guac_user", "guac_password", "vm_password", "error")
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,7 @@ class Entry:
     ip: str
     guac_user: str
     guac_password: str
+    vm_password: str = ""
     error: str = ""
 
 

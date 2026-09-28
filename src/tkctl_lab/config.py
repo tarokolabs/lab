@@ -23,6 +23,7 @@ class PveConfig:
     vmid_range: tuple[int, int]
     bridge: str
     ca_file: str | None = None
+    build_token_id: str | None = None  # only `create template` uses it
 
 
 @dataclass(frozen=True)
@@ -62,14 +63,17 @@ class Secrets:
 
 
 PVE_TOKEN_ENV = "TK_LAB_PVE_TOKEN"
+PVE_BUILD_TOKEN_ENV = "TK_LAB_PVE_BUILD_TOKEN"
 GUAC_PASSWORD_ENV = "TK_LAB_GUAC_PASSWORD"
 
 INIT_TEMPLATE = """# tkctl lab configuration. Secrets never go here:
-#   TK_LAB_PVE_TOKEN      the PVE API token secret
-#   TK_LAB_GUAC_PASSWORD  the Guacamole service account password
+#   TK_LAB_PVE_TOKEN        the PVE API token secret (classes)
+#   TK_LAB_PVE_BUILD_TOKEN  the build token secret (`create template` only)
+#   TK_LAB_GUAC_PASSWORD    the Guacamole service account password
 [pve]
 url = "https://pve-node1:8006"
 token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tkctl lab init` prints the pveum commands
+build_token_id = "lab@pve!tkctl-build"   # may write images and fetch URLs; used by create template
 node = "auto"                    # node for new VMs; "auto" picks the one with the most free memory
 pool = "lab"                     # every VM this tool touches lives in this pool
 storage = "nas-nfs"              # shared storage with images, snippets and import content;
@@ -105,6 +109,14 @@ def config_path() -> Path:
 def state_dir() -> Path:
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
     return Path(base) / "tkctl" / "lab"
+
+
+def build_secret(environ: dict | None = None) -> str:
+    env = os.environ if environ is None else environ
+    value = env.get(PVE_BUILD_TOKEN_ENV)
+    if not value:
+        raise ConfigError(f"missing environment variable: {PVE_BUILD_TOKEN_ENV}")
+    return value
 
 
 def secrets() -> Secrets:
@@ -157,6 +169,9 @@ def load(path: Path | None = None) -> Config:
     ca_file = pve.get("ca_file")
     if ca_file is not None and not isinstance(ca_file, str):
         errors.append("pve.ca_file must be a path string")
+    build_token_id = pve.get("build_token_id")
+    if build_token_id is not None and not isinstance(build_token_id, str):
+        errors.append("pve.build_token_id must be a string like user@realm!tokenid")
     g = {k: _require(guac, k, str, errors, "guacamole") for k in ("url", "username")}
     v = {k: vm.get(k, getattr(VmConfig, k)) for k in ("cores", "memory", "balloon", "disk")}
     for k in ("cores", "memory", "balloon"):
@@ -169,7 +184,13 @@ def load(path: Path | None = None) -> Config:
         raise ConfigError(f"{path}:\n  " + "\n  ".join(errors))
     assert template is not None and rng is not None  # every error path raised above
     return Config(
-        pve=PveConfig(**p, template=template, vmid_range=(rng[0], rng[1]), ca_file=ca_file),
+        pve=PveConfig(
+            **p,
+            template=template,
+            vmid_range=(rng[0], rng[1]),
+            ca_file=ca_file,
+            build_token_id=build_token_id,
+        ),
         guacamole=GuacConfig(**g),
         vm=VmConfig(**v),
         template=TemplateConfig(

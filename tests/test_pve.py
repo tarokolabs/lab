@@ -57,6 +57,8 @@ def test_auth_header_and_form_body():
     assert c.clone("n1", 3900, 3101, "lab-x-01", "lab", "n2") == "UPID:x"
     ((_key, body, headers),) = op.calls
     assert headers["Authorization"] == "PVEAPIToken=lab@pve!tkctl=SECRET"
+    # secrets never appear in the string form of the client or its errors
+    assert "SECRET" not in repr(c)
     assert body == "newid=3101&name=lab-x-01&pool=lab&full=0&target=n2"
 
 
@@ -74,35 +76,64 @@ def test_next_vmid_skips_used_ids_in_range():
         {"vmid": 3101, "type": "lxc"},
         {"vmid": 3900, "type": "qemu"},
     ]
-    c, _ = client({("GET", "/cluster/resources"): res})
+    nextid = lambda req: int(req.full_url.rsplit("=", 1)[1])  # noqa: E731
+    c, _ = client({("GET", "/cluster/resources"): res, ("GET", "/cluster/nextid"): nextid})
     assert c.next_vmid(3100, 3199) == 3102
 
 
 def test_next_vmid_exhausted():
-    c, _ = client({("GET", "/cluster/resources"): [{"vmid": 3100, "type": "qemu"}]})
+    routes = {("GET", "/cluster/resources"): [{"vmid": 3100, "type": "qemu"}]}
+    c, _ = client(routes)
     with pytest.raises(pve.PveError, match="no free VMID"):
         c.next_vmid(3100, 3100)
 
 
-def test_pick_node_most_free_memory_online():
+def test_online_nodes_sorted_by_free_memory_when_visible():
     res = [
         {"node": "n1", "status": "online", "maxmem": 100, "mem": 90},
         {"node": "n2", "status": "online", "maxmem": 100, "mem": 10},
         {"node": "n3", "status": "offline", "maxmem": 100, "mem": 0},
     ]
     c, _ = client({("GET", "/cluster/resources"): res})
-    assert c.pick_node() == "n2"
+    assert c.online_nodes() == ["n2", "n1"]
+    # without Sys.Audit the stats are missing; the nodes are still listed, in cluster order
+    bare = [{"node": "n1", "status": "online"}, {"node": "n2", "status": "online"}]
+    c2, _ = client({("GET", "/cluster/resources"): bare})
+    assert c2.online_nodes() == ["n1", "n2"]
+    c3, _ = client({("GET", "/cluster/resources"): []})
+    with pytest.raises(pve.PveError, match="no online node"):
+        c3.online_nodes()
 
 
-def test_wait_task_polls_until_stopped_and_raises_on_failure():
+def test_next_vmid_confirms_with_cluster_nextid_and_honours_exclude():
+    # 3100 is used by a VM the token cannot see: /cluster/resources omits it, /cluster/nextid knows
+    def nextid(req):
+        if "vmid=3100" in req.full_url:
+            return http_error(400, b'{"errors":{"vmid":"VM 3100 already exists"}}')
+        return int(req.full_url.rsplit("=", 1)[1])
+
+    routes = {("GET", "/cluster/resources"): [], ("GET", "/cluster/nextid"): nextid}
+    c, _ = client(routes)
+    assert c.next_vmid(3100, 3199) == 3101
+    assert c.next_vmid(3100, 3199, exclude={3101, 3102}) == 3103
+    assert c.vmid_free(3100) is False and c.vmid_free(3105) is True
+
+
+def test_wait_task_polls_the_node_in_the_upid_and_accepts_warnings():
     seq = iter([{"status": "running"}, {"status": "stopped", "exitstatus": "OK"}])
-    c, op = client({("GET", "/nodes/n1/tasks/UPID%3Ax/status"): lambda req: next(seq)})
-    c.wait_task("n1", "UPID:x")
+    upid = "UPID:n1:0001:0002:0003:qmclone:3101:lab@pve!tkctl:"
+    quoted = upid.replace(":", "%3A").replace("!", "%21").replace("@", "%40")
+    path = f"/nodes/n1/tasks/{quoted}/status"
+    c, op = client({("GET", path): lambda req: next(seq)})
+    c.wait_task(upid)  # the node comes from the UPID, never from the caller
     assert len(op.calls) == 2
+    warn = {"status": "stopped", "exitstatus": "WARNINGS: 1"}
+    c2, _ = client({("GET", "/nodes/n2/tasks/UPID%3An2%3Ay/status"): warn})
+    c2.wait_task("UPID:n2:y")
     failed = {"status": "stopped", "exitstatus": "clone failed: disk full"}
-    c2, _ = client({("GET", "/nodes/n1/tasks/UPID%3Ay/status"): failed})
+    c3, _ = client({("GET", "/nodes/n1/tasks/UPID%3An1%3Ay/status"): failed})
     with pytest.raises(pve.PveError, match="disk full"):
-        c2.wait_task("n1", "UPID:y")
+        c3.wait_task("UPID:n1:y")
 
 
 def test_agent_ipv4_picks_first_real_address_and_times_out():
@@ -167,24 +198,6 @@ def test_vm_node_finds_the_template_host():
         c.vm_node(4000)
 
 
-def test_download_url_and_upload_snippet():
-    routes = {
-        ("POST", "/nodes/n1/storage/nas-nfs/download-url"): "UPID:dl",
-        ("POST", "/nodes/n1/storage/nas-nfs/upload"): "UPID:up",
-    }
-    c, op = client(routes)
-    assert (
-        c.download_url("n1", "nas-nfs", "import", "https://x/i.qcow2", "i.qcow2", "ab") == "UPID:dl"
-    )
-    assert c.upload_snippet("n1", "nas-nfs", "u.yaml", b"#cloud-config\n") == "UPID:up"
-    (_, dl_body, _), (_, up_body, up_headers) = op.calls
-    assert "checksum-algorithm=sha512" in dl_body and "content=import" in dl_body
-    assert up_headers["Content-type"].startswith("multipart/form-data; boundary=")
-    assert 'name="content"\r\n\r\nsnippets' in up_body
-    assert 'filename="u.yaml"' in up_body and "#cloud-config" in up_body
-    assert up_headers["Authorization"] == "PVEAPIToken=lab@pve!tkctl=SECRET"
-
-
 def test_create_resize_template_and_wait_status():
     seq = iter(["running", "stopped"])
     routes = {
@@ -195,11 +208,23 @@ def test_create_resize_template_and_wait_status():
     }
     c, op = client(routes)
     assert c.create_vm("n1", 3900, name="t", agent=1) == "UPID:cr"
-    c.resize("n1", 3900, "scsi0", "60G")
+    assert c.resize("n1", 3900, "scsi0", "60G") is None  # older PVE answers null, newer a UPID
     c.wait_status("n1", 3900, "stopped", timeout=60)
     c.make_template("n1", 3900)
     bodies = [b for (_, b, _) in op.calls]
     assert bodies[0] == "vmid=3900&name=t&agent=1" and bodies[1] == "disk=scsi0&size=60G"
+
+
+def test_set_config_is_synchronous_put_and_vm_config_reads():
+    routes = {
+        ("PUT", "/nodes/n1/qemu/3101/config"): None,
+        ("GET", "/nodes/n1/qemu/3101/config"): {"cores": 8, "scsi0": "x,size=60G"},
+    }
+    c, op = client(routes)
+    c.set_config("n1", 3101, ciuser="student", tags="lab;class-x")
+    assert c.vm_config("n1", 3101)["cores"] == 8
+    ((key, body, _), _) = op.calls
+    assert key == ("PUT", "/nodes/n1/qemu/3101/config") and "tags=lab%3Bclass-x" in body
     c2, _ = client({("GET", "/nodes/n1/qemu/3900/status/current"): {"status": "running"}})
     with pytest.raises(pve.PveError, match="did not reach stopped"):
         c2.wait_status("n1", 3900, "stopped", timeout=20)

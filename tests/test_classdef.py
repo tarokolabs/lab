@@ -39,6 +39,13 @@ def write(tmp_path: Path, text: str) -> Path:
     return p
 
 
+def write_tmp(text: str) -> Path:
+    import tempfile
+
+    d = Path(tempfile.mkdtemp())
+    return write(d, text)
+
+
 def test_from_file_names_and_overrides(tmp_path):
     p = write(
         tmp_path,
@@ -93,6 +100,21 @@ name = "nobody"
         'override for unknown student "nobody"',
     ):
         assert needle in msg, needle
+
+
+def test_balloon_must_not_exceed_memory():
+    with pytest.raises(classdef.ClassDefError, match=r"balloon .* must not exceed memory"):
+        flags("k8s-101", 1, memory=4096)  # config balloon 8192 > 4096
+    cd = classdef.from_file(
+        write_tmp('name = "x"\ncount = 1\n[vm]\nmemory = 4096\nballoon = 4096\n'), vm=VM
+    )
+    assert cd.students[0].balloon == 4096
+
+
+def test_student_error_names_the_student_rule(tmp_path):
+    with pytest.raises(classdef.ClassDefError) as e:
+        classdef.from_file(write(tmp_path, 'name = "x"\nstudents = ["Bob"]\n'), vm=VM)
+    assert "[0-9]{2,3}" in str(e.value)
 
 
 def test_to_toml_round_trips(tmp_path):

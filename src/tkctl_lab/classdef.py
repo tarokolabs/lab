@@ -89,18 +89,24 @@ def _build(
     seen: set[str] = set()
     for n in names:
         if not STUDENT_RE.match(n):
-            errors.append(f'student "{n}" must match {NAME_RE.pattern}')
+            errors.append(f'student "{n}" must match {STUDENT_RE.pattern}')
         elif n in seen:
             errors.append(f"duplicate student {n}")
         seen.add(n)
     for n in overrides:
         if n not in seen:
             errors.append(f'override for unknown student "{n}"')
+    base = {k: getattr(vm, k) for k in VM_FIELDS} | class_vm
+    specs = {n: base | overrides.get(n, {}) for n in names}
+    for n, spec in specs.items():
+        if not errors and spec["balloon"] > spec["memory"]:
+            errors.append(
+                f'balloon ({spec["balloon"]}) must not exceed memory ({spec["memory"]}) for "{n}"'
+            )
     if errors:
         raise ClassDefError("invalid class definition:\n  " + "\n  ".join(errors))
     assert isinstance(name, str)
-    base = {k: getattr(vm, k) for k in VM_FIELDS} | class_vm
-    students = tuple(Student(name=n, **(base | overrides.get(n, {}))) for n in names)
+    students = tuple(Student(name=n, **specs[n]) for n in names)
     return ClassDef(name=name, students=students, expires=expires, node=node)
 
 

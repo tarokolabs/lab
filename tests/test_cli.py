@@ -102,7 +102,7 @@ def test_describe_plain_and_roster(env, capsys):
 
 def test_describe_unknown_class_is_exit_1(env, capsys):
     rc, *_ = run(["describe", "class", "nope"])
-    assert rc == 1 and "class-nope" in capsys.readouterr().err
+    assert rc == 1 and "no class nope" in capsys.readouterr().err
     rc, *_ = run(["describe", "class", "nope", "--roster"])
     assert rc == 1 and "no roster" in capsys.readouterr().err
 
@@ -150,10 +150,50 @@ def test_init_writes_config_once_and_prints_pveum(tmp_path, monkeypatch, capsys)
     assert cli.main(["init"]) == 0  # existing config is kept; only the pveum commands are printed
     again = capsys.readouterr().out
     assert "wrote" not in again
-    assert "pveum acl modify /pool/lab" in again
-    assert "pveum user token add lab@pve tkctl" in again
-    assert "pveum acl modify /nodes" in again  # Sys.Audit so `node = auto` can see node memory
+    assert "grant /pool/lab TkctlLabClass 'lab@pve!tkctl'" in again
+    assert 'pveum acl modify "$1" -token "$3"' in again
+    assert "pveum user token add lab@pve tkctl --privsep 1" in again
+    assert "pveum user token add lab@pve tkctl-build --privsep 1" in again
+    # least privilege: no Sys.Audit anywhere, no VM.Monitor, no Pool.Audit; the runtime token
+    # may only clone the template, and only the build token may write images or fetch URLs
+    assert "Sys.Audit" not in again and "VM.Monitor" not in again and "Pool.Audit" not in again
+    assert "Datastore.AllocateTemplate" in again and "Sys.AccessNetwork" in again
+    assert "'lab@pve!tkctl'" in again and "'lab@pve!tkctl-build'" in again  # no history expansion
+    assert re.search(r"role add TkctlLabTemplateUse .*VM\.Clone", again)
+    assert (
+        "/vms/3900" in again
+        and "/storage/nas-nfs" in again
+        and "/sdn/zones/localnetwork/vmbr0" in again
+    )
     assert config.config_path().read_text() == GOOD
+
+
+def test_pve_error_is_one_line_and_exit_1(env, capsys):
+    from tkctl_lab.pve import PveError
+
+    class Broken(FakePve):
+        def pool_vms(self, pool):
+            raise PveError(0, "GET /cluster/resources: certificate verify failed; set pve.ca_file")
+
+    rc = cli.main(["get", "classes"], make_clients=lambda c, s: (Broken(), FakeGuac()))
+    err = capsys.readouterr().err
+    assert rc == 1 and err.count("\n") == 1 and "set pve.ca_file" in err
+
+
+def test_create_template_uses_the_build_token_and_node(env, monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_BUILD_TOKEN", "b")
+    seen = {}
+
+    def build_client(cfg, token):
+        seen["token"] = token
+        return FakePve()
+
+    rc = cli.main(["create", "template", "--node", "pve-node7"], make_build_client=build_client)
+    out = capsys.readouterr().out
+    assert rc == 1 and seen["token"] == "b" and "/mnt/pve/nas-nfs/snippets/" in out
+    monkeypatch.delenv("TK_LAB_PVE_BUILD_TOKEN")
+    rc = cli.main(["create", "template"], make_build_client=build_client)
+    assert rc == 2 and "TK_LAB_PVE_BUILD_TOKEN" in capsys.readouterr().err
 
 
 def test_missing_secret_is_named(env, monkeypatch, capsys):

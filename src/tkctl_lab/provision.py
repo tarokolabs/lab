@@ -6,6 +6,7 @@ import re
 import secrets
 import string
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
@@ -98,8 +99,9 @@ class _Cloner:
 class _Class:
     """Everything one create() run shares: config, clients, node choice, template facts."""
 
-    def __init__(self, cd: ClassDef, cfg: Config, pve, guac, log):
+    def __init__(self, cd: ClassDef, cfg: Config, pve, guac, log, sleep=time.sleep):
         self.cd, self.cfg, self.pve, self.guac, self.log = cd, cfg, pve, guac, log
+        self.sleep = sleep
         self.group_id = guac.ensure_group(cd.name)
         template_node = pve.vm_node(cfg.pve.template)
         self.cloner = _Cloner(cfg, pve, template_node)
@@ -117,7 +119,7 @@ def _entry(s: Student, vmid: int, node: str, ip: str, login: str, err: str, **kw
 
 
 def _clone_and_start(c: _Class, s: Student, node: str) -> roster.Entry:
-    """Clone, configure and start the VM. The returned entry carries the VM password."""
+    """Clone, then configure and start the VM. The returned entry carries the VM password."""
     name = vm_name(c.cd.name, s)
     try:
         want = size_bytes(s.disk)
@@ -127,16 +129,33 @@ def _clone_and_start(c: _Class, s: Student, node: str) -> roster.Entry:
         return _entry(s, 0, node, "", "", f"disk {s.disk} is smaller than the template disk")
     try:
         vmid, upid = c.cloner.clone(name, node)
+        c.pve.wait_task(upid)
     except PveError as e:
         return _entry(s, 0, node, "", "", f"clone: {e}")
-    vm_password = _password()
+    return _setup(c, s, _entry(s, vmid, node, "", "", "", vp=_password()))
+
+
+def _start(c: _Class, node: str, vmid: int) -> None:
+    """Start once more when PVE trips over its own mkdir on NFS (parallel clones)."""
     try:
-        c.pve.wait_task(upid)
+        c.pve.wait_task(c.pve.start(node, vmid))
+    except PveError as e:
+        if "File exists" not in str(e):
+            raise
+        c.sleep(2)
+        c.pve.wait_task(c.pve.start(node, vmid))
+
+
+def _setup(c: _Class, s: Student, e: roster.Entry) -> roster.Entry:
+    """Apply the student's cloud-init, sizing and tags to a cloned VM and start it."""
+    name = vm_name(c.cd.name, s)
+    want = size_bytes(s.disk)
+    try:
         c.pve.set_config(
-            node,
-            vmid,
+            e.node,
+            e.vmid,
             ciuser=STUDENT_USER,
-            cipassword=vm_password,
+            cipassword=e.vm_password,
             ipconfig0="ip=dhcp",
             ciupgrade=0,
             cores=s.cores,
@@ -145,14 +164,14 @@ def _clone_and_start(c: _Class, s: Student, node: str) -> roster.Entry:
             tags=_tags(c.cd),
         )
         if want > c.template_disk:
-            resize = c.pve.resize(node, vmid, "scsi0", s.disk)
+            resize = c.pve.resize(e.node, e.vmid, "scsi0", s.disk)
             if resize:
                 c.pve.wait_task(resize)
-        c.pve.wait_task(c.pve.start(node, vmid))
-    except PveError as e:
-        return _entry(s, vmid, node, "", "", f"vm setup: {e}", vp=vm_password)
-    c.log(f"{name}: VM {vmid} on {node} started, waiting for an address")
-    return _entry(s, vmid, node, "", "", "", vp=vm_password)
+        _start(c, e.node, e.vmid)
+    except PveError as err:
+        return _entry(s, e.vmid, e.node, "", "", f"vm setup: {err}", vp=e.vm_password)
+    c.log(f"{name}: VM {e.vmid} on {e.node} started, waiting for an address")
+    return _entry(s, e.vmid, e.node, "", "", "", vp=e.vm_password)
 
 
 def _connect(c: _Class, s: Student, e: roster.Entry, *, resume: bool) -> roster.Entry:
@@ -208,6 +227,10 @@ def _provision_one(
             return previous
         if previous is not None and previous.vmid:
             e = previous
+            if previous.error.startswith("vm setup"):
+                current = e = _setup(c, s, previous)
+                if e.error:
+                    return e
         else:
             current = e = _clone_and_start(c, s, c.node_for(index))
             if e.error:

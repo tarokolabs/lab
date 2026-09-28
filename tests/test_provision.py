@@ -327,3 +327,39 @@ def test_describe_leaves_node_unset_when_a_class_spans_nodes():
     pve, guac = FakePve(nodes=("n1", "n2")), FakeGuac()
     provision.create(cd(["a", "b"]), CFG, pve, guac, parallel=1, **QUIET)
     assert provision.describe("k8s-101", CFG, pve).node is None
+
+
+def test_start_retries_once_on_pve_nfs_mkdir_race(monkeypatch):
+    # PVE's start regenerates the cloud-init disk and races its own mkdir on NFS when several
+    # clones land at once ("mkdir …/images/3103: File exists"); a second start goes through
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
+    pve, guac = FakePve(), FakeGuac()
+    real_start = pve.start
+    attempts = []
+
+    def start(node, vmid):
+        attempts.append(vmid)
+        if len(attempts) == 1:
+            raise PveError(
+                500, "task UPID:x failed: mkdir /mnt/pve/nas-nfs/images/3100: File exists"
+            )
+        return real_start(node, vmid)
+
+    pve.start = start
+    (e,) = provision.create(cd(["alice"]), CFG, pve, guac, parallel=1, **QUIET)
+    assert e.error == "" and attempts == [3100, 3100] and pve.vms[3100]["status"] == "running"
+
+
+def test_resume_redoes_setup_for_a_student_whose_vm_never_started():
+    pve, guac = FakePve(), FakeGuac()
+    real_start = pve.start
+    pve.start = lambda node, vmid: (_ for _ in ()).throw(PveError(500, "no free memory"))
+    (first,) = provision.create(cd(["alice"]), CFG, pve, guac, parallel=1, **QUIET)
+    assert first.error.startswith("vm setup") and first.vmid == 3100 and first.vm_password
+    assert pve.vms[3100]["status"] == "stopped"
+    pve.start = real_start
+    (again,) = provision.create(cd(["alice"]), CFG, pve, guac, parallel=1, **QUIET)
+    assert again.error == "" and again.vmid == 3100 and again.vm_password == first.vm_password
+    configs = [c for c in pve.calls if c[0] == "config" and c[1] == 3100]
+    assert len(configs) == 2 and configs[1][2]["cipassword"] == first.vm_password
+    assert pve.vms[3100]["status"] == "running" and "alice" in guac.users

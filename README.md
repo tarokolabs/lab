@@ -52,6 +52,13 @@ memory = 32768
 
 `$XDG_CONFIG_HOME/tkctl/lab.toml`（預設 `~/.config/tkctl/lab.toml`）；`tkctl lab init` 會產生含註解的範本。token 與密碼只從環境變數讀，不寫檔。PVE 的 TLS 一律驗證，自簽 CA 用 `pve.ca_file` 指定（`/etc/pve/pve-root-ca.pem`）。
 
+## 建立你的 PVE 環境（做一次）
+
+1. **設定檔**：`tkctl lab init` 寫出 `lab.toml`，填 PVE 網址、`pve.storage`（要能放 qcow2、snippets 與 import 的共用儲存，linked clone 不能用純 LVM）、bridge、VMID 範圍、Guacamole 網址。
+2. **PVE 角色與 token**：再跑一次 `tkctl lab init`，把印出的 `pveum` 指令以管理員身分在任一 PVE 節點執行；`pveum user token add` 印出的 secret 只出現一次，放進 `TK_LAB_PVE_TOKEN`。把 `/etc/pve/pve-root-ca.pem` 複製到講師機器並在 `pve.ca_file` 指定。
+3. **Guacamole 帳號**：在 Guacamole 建使用者 `tkctl-lab`，系統權限只勾 Create new users 與 Create new connections；密碼放進 `TK_LAB_GUAC_PASSWORD`。
+4. **範本**：到 `cloud.debian.org` 的 `SHA512SUMS` 抄 `debian-13-genericcloud-amd64.qcow2` 的 sha512 填進 `template.image_sha512`，然後 `tkctl lab create template`。約 15 分鐘：匯入映像、第一次開機裝 tk8s、XFCE、xrdp 並預拉 node image，關機後轉成範本。
+
 ## 權限
 
 PVE：專用使用者 `lab@pve` 與 token，自訂角色只掛在 `lab` 資源池、範本 VM、一個儲存與 bridge 上（另有唯讀的 `Sys.Audit` 在 `/nodes`，讓 `node = "auto"` 看得到節點記憶體），碰不到 pool 外的 VM；`tkctl lab init` 印出完整的 `pveum` 指令。Guacamole：專用帳號只有 `CREATE_USER` 與 `CREATE_CONNECTION`。學員在自己的 VM 裡有 sudo，VM 之間是硬體隔離。

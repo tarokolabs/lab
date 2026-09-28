@@ -109,3 +109,15 @@ def test_build_token_id_is_optional_and_read(tmp_path):
     with pytest.raises(config.ConfigError, match="TK_LAB_PVE_BUILD_TOKEN"):
         config.build_secret({})
     assert config.build_secret({"TK_LAB_PVE_BUILD_TOKEN": "x"}) == "x"
+
+
+def test_snippets_dir_is_optional(tmp_path):
+    p = tmp_path / "lab.toml"
+    p.write_text(GOOD)
+    assert config.load(p).template.snippets_dir is None
+    p.write_text(
+        GOOD + '\n[template]\nsnippets_dir = "/mnt/snippets"\n'
+        if "[template]" not in GOOD
+        else GOOD.replace("[template]\n", '[template]\nsnippets_dir = "/mnt/snippets"\n')
+    )
+    assert config.load(p).template.snippets_dir == "/mnt/snippets"

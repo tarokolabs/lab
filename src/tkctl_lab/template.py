@@ -7,6 +7,8 @@ xrdp on first boot and powers the VM off, then the VM becomes the template class
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from . import config
 from .config import Config
 from .pve import PveError
@@ -96,14 +98,23 @@ def build(cfg: Config, pve, *, k8s: str | None, node: str | None, log=print) -> 
     vmid = cfg.pve.template
 
     if not _has(pve, node, storage, "snippets", SNIPPET):
-        local = config.state_dir() / SNIPPET
-        local.parent.mkdir(parents=True, exist_ok=True)
-        local.write_text(user_data(t.tk8s_version, k8s))
-        log(f"wrote {local}")
-        log("PVE cannot receive snippets over the API; copy it onto the storage once, e.g.")
-        log(f"  scp {local} root@<pve-node>:/mnt/pve/{storage}/snippets/")
-        log("then run `tkctl lab create template` again")
-        return 1
+        data = user_data(t.tk8s_version, k8s)
+        if t.snippets_dir:
+            target = Path(t.snippets_dir) / SNIPPET
+            target.write_text(data)
+            log(f"wrote {target}")
+            if not _has(pve, node, storage, "snippets", SNIPPET):
+                log(f"{target} is not visible as {storage}:snippets/{SNIPPET}; check the mount")
+                return 1
+        else:
+            local = config.state_dir() / SNIPPET
+            local.parent.mkdir(parents=True, exist_ok=True)
+            local.write_text(data)
+            log(f"wrote {local}")
+            log("PVE cannot receive snippets over the API; copy it onto the storage once, e.g.")
+            log(f"  scp {local} root@<pve-node>:/mnt/pve/{storage}/snippets/")
+            log("then run `tkctl lab create template` again")
+            return 1
 
     if _has(pve, node, storage, "import", image):
         log(f"{image} already on {storage}, not downloading")

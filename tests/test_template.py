@@ -47,6 +47,52 @@ def test_build_needs_snippet_on_storage_first(tmp_path, monkeypatch, capsys):
     assert not any(c[0] in ("download_url", "create_vm") for c in pve.calls)
 
 
+def test_build_writes_snippet_into_a_mounted_snippets_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    mounted = tmp_path / "snippets"
+    mounted.mkdir()
+    c = cfg()
+    c = Config(
+        c.pve,
+        c.guacamole,
+        c.vm,
+        TemplateConfig(
+            c.template.image_url,
+            c.template.image_sha512,
+            c.template.tk8s_version,
+            c.template.k8s,
+            snippets_dir=str(mounted),
+        ),
+    )
+    pve = FakePve()
+    pve.storage_content = lambda node, storage, content: (
+        [{"volid": f"{storage}:snippets/{template.SNIPPET}"}]
+        if content == "snippets" and (mounted / template.SNIPPET).exists()
+        else []
+    )
+    pve.status = lambda node, vmid: "stopped"
+    pve.download_url = lambda *a: "UPID:pve-node7:dl"
+    pve.create_vm = lambda node, vmid, **kv: "UPID:pve-node7:cr"
+    pve.wait_status = lambda *a, **kw: None
+    pve.make_template = lambda *a: None
+    pve.vms[3900] = {
+        "vmid": 3900,
+        "name": "t",
+        "node": "pve-node7",
+        "pool": "",
+        "status": "stopped",
+        "tags": "",
+        "cores": 8,
+        "memory": 1,
+        "balloon": 1,
+        "disk": "2G",
+    }
+    lines = []
+    assert template.build(c, pve, k8s=None, node=None, log=lines.append) == 0
+    assert (mounted / template.SNIPPET).read_text().startswith("#cloud-config")
+    assert "scp" not in "\n".join(lines)
+
+
 def test_build_sequence():
     pve = FakePve(snippets=[template.SNIPPET])
     statuses = iter(["running", "running", "stopped"])

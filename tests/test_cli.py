@@ -151,7 +151,9 @@ def test_init_writes_config_once_and_prints_pveum(tmp_path, monkeypatch, capsys)
     again = capsys.readouterr().out
     assert "wrote" not in again
     assert "grant /pool/lab TkctlLabClass 'lab@pve!tkctl'" in again
-    assert 'pveum acl modify "$1" -token "$3"' in again
+    assert 'pveum acl modify "$1" --tokens "$3" --roles "$2"' in again
+    assert 'pveum acl modify "$1" --users lab@pve --roles "$2"' in again
+    assert "-privs" not in again.replace("--privs", "")  # long options only, spelled as pveum wants
     assert "pveum user token add lab@pve tkctl --privsep 1" in again
     assert "pveum user token add lab@pve tkctl-build --privsep 1" in again
     # least privilege: no Sys.Audit anywhere, no VM.Monitor, no Pool.Audit; the runtime token

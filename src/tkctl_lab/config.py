@@ -46,6 +46,7 @@ class TemplateConfig:
     image_sha512: str
     tk8s_version: str = "main"
     k8s: str | None = None
+    snippets_dir: str | None = None  # the storage's snippets/ when it is mounted locally
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,7 @@ image_url = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-gener
 image_sha512 = "replace-with-the-value-from-SHA512SUMS"
 tk8s_version = "v2026.10.0"     # tag or branch install.sh checks out
 k8s = "1.37.0"                   # node image pre-pulled into the template
+# snippets_dir = "/mnt/snippets"  # pve.storage's snippets/ mounted here; the build writes it there
 """
 
 
@@ -180,6 +182,9 @@ def load(path: Path | None = None) -> Config:
     if not isinstance(v["disk"], str):
         errors.append('vm.disk must be a string like "60G"')
     t = {k: _require(tpl, k, str, errors, "template") for k in ("image_url", "image_sha512")}
+    snippets_dir = tpl.get("snippets_dir")
+    if snippets_dir is not None and not isinstance(snippets_dir, str):
+        errors.append("template.snippets_dir must be a path string")
     if errors:
         raise ConfigError(f"{path}:\n  " + "\n  ".join(errors))
     assert template is not None and rng is not None  # every error path raised above
@@ -194,6 +199,9 @@ def load(path: Path | None = None) -> Config:
         guacamole=GuacConfig(**g),
         vm=VmConfig(**v),
         template=TemplateConfig(
-            **t, tk8s_version=tpl.get("tk8s_version", "main"), k8s=tpl.get("k8s")
+            **t,
+            tk8s_version=tpl.get("tk8s_version", "main"),
+            k8s=tpl.get("k8s"),
+            snippets_dir=snippets_dir,
         ),
     )

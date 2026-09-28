@@ -55,8 +55,8 @@ pveum pool add {pool} --comment "tkctl lab classes"
 pveum user token add lab@pve tkctl --privsep 1        # -> {token_env}
 pveum user token add lab@pve tkctl-build --privsep 1  # -> {build_env}
 grant() {{  # path role token: the user and the privilege-separated token both need the ACL
-  pveum acl modify "$1" -user lab@pve -role "$2"
-  pveum acl modify "$1" -token "$3" -role "$2"
+  pveum acl modify "$1" --users lab@pve --roles "$2"
+  pveum acl modify "$1" --tokens "$3" --roles "$2"
 }}
 grant /pool/{pool} TkctlLabClass 'lab@pve!tkctl'
 grant /vms/{template} TkctlLabTemplateUse 'lab@pve!tkctl'
@@ -70,7 +70,7 @@ grant /nodes/{build_node} TkctlLabFetch 'lab@pve!tkctl-build'
 
 
 def _role_lines() -> str:
-    return "\n".join(f'pveum role add {r} -privs "{" ".join(p)}"' for r, p in ROLES.items())
+    return "\n".join(f'pveum role add {r} --privs "{" ".join(p)}"' for r, p in ROLES.items())
 
 
 def _clients(cfg: config.Config, sec: config.Secrets):

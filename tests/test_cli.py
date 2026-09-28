@@ -224,3 +224,8 @@ def test_missing_config_points_at_init(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     rc = cli.main(["get", "classes"], make_clients=lambda c, s: (FakePve(), FakeGuac()))
     assert rc == 2 and "tkctl lab init" in capsys.readouterr().err
+
+
+def test_progress_lines_flush_when_stdout_is_a_file():
+    # `nohup tkctl-lab create … > log` must show progress as it happens, not at exit
+    assert cli.log.keywords == {"flush": True}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import sys
 import tomllib
@@ -79,6 +80,10 @@ grant /nodes/{build_node} TkctlLabFetch 'lab@pve!tkctl-build'
 
 def _role_lines() -> str:
     return "\n".join(f'pveum role add {r} --privs "{" ".join(p)}"' for r, p in ROLES.items())
+
+
+# Progress lines go out immediately even when stdout is a log file.
+log = functools.partial(print, flush=True)
 
 
 def _clients(cfg: config.Config, sec: config.Secrets):
@@ -222,7 +227,7 @@ def _create_class(args, cfg, pve, guac) -> int:
     except classdef.ClassDefError as e:
         return _fail(str(e))
     try:
-        entries = provision.create(cd, cfg, pve, guac, parallel=args.parallel)
+        entries = provision.create(cd, cfg, pve, guac, parallel=args.parallel, log=log)
     except provision.ProvisionError as e:
         return _fail(str(e), 1)
     _print_roster(entries)
@@ -277,7 +282,7 @@ def _delete_class(args, cfg, pve, guac) -> int:
         if not _confirm(f"Delete class {n}: its VMs, Guacamole users and connections?", args.yes):
             print("aborted")
             return 1
-        failures = provision.destroy(n, cfg, pve, guac)
+        failures = provision.destroy(n, cfg, pve, guac, log=log)
         for f in failures:
             print(f"  failed: {f}", file=sys.stderr)
         rc = rc or (1 if failures else 0)
@@ -291,7 +296,7 @@ def _dispatch(args, *, make_clients, make_build_client) -> int:
         from . import template
 
         pve = (make_build_client or _build_client)(cfg, config.build_secret())
-        return template.build(cfg, pve, k8s=args.k8s, node=args.node)
+        return template.build(cfg, pve, k8s=args.k8s, node=args.node, log=log)
     needs_guac = args.verb in ("create", "delete")
     pve, guac = (make_clients or _clients)(cfg, config.secrets(guacamole=needs_guac))
     if args.verb == "create":

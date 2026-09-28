@@ -186,3 +186,34 @@ def test_login_without_secret_reports_the_totp_requirement():
     op = opener_with({("POST", "/tokens"): err})
     with pytest.raises(guac.GuacError, match="TK_LAB_GUAC_TOTP_SECRET"):
         guac.Guac("https://guac", "svc", "pw", opener=op).login()
+
+
+def test_login_retries_a_rejected_totp_code_on_the_next_period():
+    # Guacamole refuses a code that was already used in the same 30 s period (replay protection),
+    # which happens when two commands run back to back; wait for the next period and try once more
+    challenge = {"expected": [{"name": "guac-totp"}]}
+    rejected = {"message": "Provided TOTP code is not valid.", "type": "INVALID_CREDENTIALS"}
+    calls, slept = [], []
+
+    def tokens(req, body):
+        calls.append(body)
+        if "guac-totp=" not in body:
+            return urllib.error.HTTPError(
+                "u", 403, "F", {}, BytesIO(json.dumps(challenge).encode())
+            )
+        if not slept:
+            return urllib.error.HTTPError("u", 400, "B", {}, BytesIO(json.dumps(rejected).encode()))
+        return {"authToken": "T", "dataSource": "mysql"}
+
+    op = opener_with({("POST", "/tokens"): tokens})
+    c = guac.Guac(
+        "https://guac",
+        "svc",
+        "pw",
+        totp_secret="GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+        opener=op,
+        sleep=slept.append,
+    )
+    c.login()
+    assert len(calls) == 3 and c.data_source == "mysql"
+    assert 0 < slept[0] <= 31

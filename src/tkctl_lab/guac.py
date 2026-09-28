@@ -61,12 +61,20 @@ def _body(err: urllib.error.HTTPError) -> dict:
 
 class Guac:
     def __init__(
-        self, url: str, username: str, password: str, *, totp_secret: str | None = None, opener=None
+        self,
+        url: str,
+        username: str,
+        password: str,
+        *,
+        totp_secret: str | None = None,
+        opener=None,
+        sleep=time.sleep,
     ):
         self.base = url.rstrip("/") + "/api"
         self.username = username
         self.password = password
         self.totp_secret = totp_secret
+        self.sleep = sleep
         # Default opener verifies TLS with the system trust store; no insecure mode.
         self.opener = opener or (
             lambda req, timeout=None, context=None: urllib.request.urlopen(req, timeout=timeout)
@@ -111,9 +119,21 @@ class Guac:
                     f"login needs a TOTP code; enrol {self.username} once and set "
                     f"{TOTP_SECRET_ENV} to its secret",
                 ) from e
-            creds[TOTP_FIELD] = totp(self.totp_secret)
-            r = self._call("POST", "/tokens", creds, form=True)
+            r = self._login_with_code(creds)
         self.token, self.data_source = r["authToken"], r["dataSource"]
+
+    def _login_with_code(self, creds: dict) -> dict:
+        """A code already used in this 30 s period is refused; wait for the next one and retry."""
+        assert self.totp_secret
+        creds[TOTP_FIELD] = totp(self.totp_secret)
+        try:
+            return self._call("POST", "/tokens", creds, form=True)
+        except GuacError as e:
+            if "TOTP" not in str(e):
+                raise
+        self.sleep(31 - time.time() % 30)
+        creds[TOTP_FIELD] = totp(self.totp_secret)
+        return self._call("POST", "/tokens", creds, form=True)
 
     def _data(self, method: str, path: str, body: Any = None) -> Any:
         if not self.token:

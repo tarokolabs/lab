@@ -160,6 +160,9 @@ def test_init_writes_config_once_and_prints_pveum(tmp_path, monkeypatch, capsys)
     # may only clone the template, and only the build token may write images or fetch URLs
     assert "Sys.Audit" not in again and "VM.Monitor" not in again and "Pool.Audit" not in again
     assert "Datastore.AllocateTemplate" in again and "Sys.AccessNetwork" in again
+    # snippets are only visible with Datastore.Allocate (check_volume_access); build token only
+    assert re.search(r"role add TkctlLabImage .*Datastore\.Allocate ", again + " ")
+    assert not re.search(r"role add TkctlLabDisk .*Datastore\.Allocate ", again + " ")
     assert "'lab@pve!tkctl'" in again and "'lab@pve!tkctl-build'" in again  # no history expansion
     assert re.search(r"role add TkctlLabTemplateUse .*VM\.Clone", again)
     assert (

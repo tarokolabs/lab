@@ -63,7 +63,7 @@ memory = 32768
 
 ## 權限
 
-PVE：專用使用者 `lab@pve` 與兩個 token。開班用的 token 只能 clone 範本、管理 `lab` 資源池內的 VM、在一個儲存上配置空間、使用一個 bridge；建範本用的 token 才能寫映像與讓節點抓網址。`/`、`/vms`、`/nodes` 上什麼都不給，所以碰不到 pool 外的 VM；`tkctl lab init` 印出完整的 `pveum` 指令。`node = "auto"` 會把 VM 輪流放到線上的節點（token 看不到節點記憶體，看得到時會優先放最空的）。需要 PVE 8 以上（`VM.GuestAgent.Audit`）、Guacamole 1.5 以上。Guacamole：專用帳號只有 `CREATE_USER` 與 `CREATE_CONNECTION`。學員在自己的 VM 裡有 sudo，VM 之間是硬體隔離。
+PVE：專用使用者 `lab@pve` 與兩個 token。開班用的 token 只能 clone 範本、管理 `lab` 資源池內的 VM、在一個儲存上配置空間、使用一個 bridge；建範本用的 token 才能寫映像、引用 snippets（PVE 要求 `Datastore.Allocate`，這個權限也能刪該儲存上的 volume，所以範本建好後建議 `pveum user token remove lab@pve tkctl-build`，要重建再開）與讓節點抓網址。`/`、`/vms`、`/nodes` 上什麼都不給，所以碰不到 pool 外的 VM；`tkctl lab init` 印出完整的 `pveum` 指令。`node = "auto"` 會把 VM 輪流放到線上的節點（token 看不到節點記憶體，看得到時會優先放最空的）。需要 PVE 8 以上（`VM.GuestAgent.Audit`）、Guacamole 1.5 以上。Guacamole：專用帳號只有 `CREATE_USER` 與 `CREATE_CONNECTION`。學員在自己的 VM 裡有 sudo，VM 之間是硬體隔離。
 
 ## 授權
 

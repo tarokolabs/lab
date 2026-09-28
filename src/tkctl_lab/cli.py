@@ -44,7 +44,15 @@ ROLES = {
         "VM.Config.Network",
     ],
     "TkctlLabDisk": ["Datastore.AllocateSpace", "Datastore.Audit"],
-    "TkctlLabImage": ["Datastore.AllocateSpace", "Datastore.AllocateTemplate", "Datastore.Audit"],
+    # Datastore.Allocate: PVE only lets a caller see or reference snippets with it. It also allows
+    # deleting volumes on the storage, so it sits on the build token alone; remove that token
+    # once the template exists.
+    "TkctlLabImage": [
+        "Datastore.AllocateSpace",
+        "Datastore.AllocateTemplate",
+        "Datastore.Allocate",
+        "Datastore.Audit",
+    ],
     "TkctlLabBridge": ["SDN.Use"],
     "TkctlLabFetch": ["Sys.AccessNetwork"],
 }

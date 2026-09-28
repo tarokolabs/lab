@@ -60,7 +60,7 @@ class Config:
 @dataclass(frozen=True)
 class Secrets:
     pve_token: str
-    guac_password: str
+    guac_password: str | None  # None when the command does not talk to Guacamole
 
 
 PVE_TOKEN_ENV = "TK_LAB_PVE_TOKEN"
@@ -121,11 +121,13 @@ def build_secret(environ: dict | None = None) -> str:
     return value
 
 
-def secrets() -> Secrets:
-    missing = [v for v in (PVE_TOKEN_ENV, GUAC_PASSWORD_ENV) if not os.environ.get(v)]
+def secrets(*, guacamole: bool = True) -> Secrets:
+    wanted = (PVE_TOKEN_ENV, GUAC_PASSWORD_ENV) if guacamole else (PVE_TOKEN_ENV,)
+    missing = [v for v in wanted if not os.environ.get(v)]
     if missing:
         raise ConfigError("missing environment variable(s): " + ", ".join(missing))
-    return Secrets(os.environ[PVE_TOKEN_ENV], os.environ[GUAC_PASSWORD_ENV])
+    guac = os.environ[GUAC_PASSWORD_ENV] if guacamole else None
+    return Secrets(os.environ[PVE_TOKEN_ENV], guac)
 
 
 def _is_int(value: object) -> bool:

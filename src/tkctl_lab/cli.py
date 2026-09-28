@@ -75,7 +75,8 @@ def _role_lines() -> str:
 
 def _clients(cfg: config.Config, sec: config.Secrets):
     pve = Pve(cfg.pve.url, cfg.pve.token_id, sec.pve_token, ca_file=cfg.pve.ca_file)
-    return pve, Guac(cfg.guacamole.url, cfg.guacamole.username, sec.guac_password)
+    guac = Guac(cfg.guacamole.url, cfg.guacamole.username, sec.guac_password or "")
+    return pve, guac
 
 
 def _build_client(cfg: config.Config, token: str):
@@ -283,7 +284,8 @@ def _dispatch(args, *, make_clients, make_build_client) -> int:
 
         pve = (make_build_client or _build_client)(cfg, config.build_secret())
         return template.build(cfg, pve, k8s=args.k8s, node=args.node)
-    pve, guac = (make_clients or _clients)(cfg, config.secrets())
+    needs_guac = args.verb in ("create", "delete")
+    pve, guac = (make_clients or _clients)(cfg, config.secrets(guacamole=needs_guac))
     if args.verb == "create":
         return _create_class(args, cfg, pve, guac)
     if args.verb == "get":

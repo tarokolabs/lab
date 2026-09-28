@@ -198,6 +198,19 @@ def test_create_template_uses_the_build_token_and_node(env, monkeypatch, capsys)
     assert rc == 2 and "TK_LAB_PVE_BUILD_TOKEN" in capsys.readouterr().err
 
 
+def test_get_and_describe_do_not_need_the_guacamole_password(env, monkeypatch, capsys):
+    monkeypatch.delenv("TK_LAB_GUAC_PASSWORD")
+    seen = {}
+
+    def clients(cfg, sec):
+        seen["guac"] = sec.guac_password
+        return FakePve(), FakeGuac()
+
+    assert cli.main(["get", "classes"], make_clients=clients) == 0 and seen["guac"] is None
+    rc = cli.main(["create", "class", "x", "--students", "1"], make_clients=clients)
+    assert rc == 2 and "TK_LAB_GUAC_PASSWORD" in capsys.readouterr().err
+
+
 def test_missing_secret_is_named(env, monkeypatch, capsys):
     monkeypatch.delenv("TK_LAB_PVE_TOKEN", raising=False)
     rc = cli.main(["get", "classes"], make_clients=lambda c, s: (FakePve(), FakeGuac()))

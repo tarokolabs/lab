@@ -32,6 +32,14 @@ def _detail(body: str) -> str:
     return " ".join(f"{k}: {v}" for k, v in (errors or {}).items())
 
 
+def tls_context(ca_file: str | None) -> ssl.SSLContext:
+    """Verified TLS (chain + hostname). PVE's self-signed CA lacks the Authority Key Identifier
+    that Python 3.13+'s VERIFY_X509_STRICT demands, so strictness alone is switched off."""
+    ctx = ssl.create_default_context(cafile=ca_file and os.path.expanduser(ca_file))
+    ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    return ctx
+
+
 class Pve:
     def __init__(
         self,
@@ -51,7 +59,7 @@ class Pve:
             self.opener = opener
         else:
             # TLS is always verified; PVE's self-signed CA goes in pve.ca_file. No insecure mode.
-            ctx = ssl.create_default_context(cafile=ca_file and os.path.expanduser(ca_file))
+            ctx = tls_context(ca_file)
             self.opener = lambda req, timeout=None, context=None: urllib.request.urlopen(
                 req, timeout=timeout, context=ctx
             )

@@ -228,3 +228,13 @@ def test_set_config_is_synchronous_put_and_vm_config_reads():
     c2, _ = client({("GET", "/nodes/n1/qemu/3900/status/current"): {"status": "running"}})
     with pytest.raises(pve.PveError, match="did not reach stopped"):
         c2.wait_status("n1", 3900, "stopped", timeout=20)
+
+
+def test_default_tls_context_verifies_but_is_not_rfc5280_strict(tmp_path):
+    # Python 3.13+ turns on VERIFY_X509_STRICT, which rejects PVE's own CA (no Authority Key
+    # Identifier). Verification of the chain and the hostname stays on; only strictness goes.
+    ctx = pve.tls_context(None)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+    assert not ctx.verify_flags & ssl.VERIFY_X509_STRICT
+    c = pve.Pve("https://pve:8006", "t", "s")  # builds the default opener without error
+    assert c.opener is not None

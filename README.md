@@ -58,12 +58,12 @@ memory = 32768
 
 1. **設定檔**：`tkctl lab init` 寫出 `lab.toml`，填 PVE 網址、`pve.storage`（要能放 qcow2、snippets 與 import 的共用儲存，linked clone 不能用純 LVM）、bridge、VMID 範圍、Guacamole 網址。
 2. **PVE 角色與 token**：再跑一次 `tkctl lab init`，把印出的 `pveum` 指令以管理員身分在任一 PVE 節點執行。會建兩個 token：`tkctl`（開班、刪班用）與 `tkctl-build`（只有 `create template` 用，多了寫映像與抓網址的權限）；`pveum user token add` 印出的 secret 只出現一次，分別放進 `TK_LAB_PVE_TOKEN` 與 `TK_LAB_PVE_BUILD_TOKEN`。把 `/etc/pve/pve-root-ca.pem` 複製到講師機器並在 `pve.ca_file` 指定。
-3. **Guacamole 帳號**：在 Guacamole 建使用者 `tkctl-lab`，系統權限只勾 Create new users 與 Create new connections；密碼放進 `TK_LAB_GUAC_PASSWORD`。如果 Guacamole 有裝 TOTP 擴充且版本低於 1.6（無法對單一使用者關閉），用這個帳號登入一次完成註冊，把註冊頁顯示的 base32 secret 放進 `TK_LAB_GUAC_TOTP_SECRET`，工具登入時會自己算驗證碼。
+3. **Guacamole 帳號**：在 Guacamole 建使用者 `tkctl-lab`，系統權限只勾 Create new users、Create new connections 與 Create new connection groups（每班一個 group）；密碼放進 `TK_LAB_GUAC_PASSWORD`。如果 Guacamole 有裝 TOTP 擴充且版本低於 1.6（無法對單一使用者關閉），用這個帳號登入一次完成註冊，把註冊頁顯示的 base32 secret 放進 `TK_LAB_GUAC_TOTP_SECRET`，工具登入時會自己算驗證碼。
 4. **範本**：到 `cloud.debian.org` 的 `SHA512SUMS` 抄 `debian-13-genericcloud-amd64.qcow2` 的 sha512 填進 `template.image_sha512`，然後 `tkctl lab create template`（`pve.node` 是 `auto` 時要加 `--node`）。第一次跑只會把 cloud-init 的 snippet 寫到本機並印出 `scp` 指令：PVE 的 API 不收 snippets，得自己複製到儲存的 `snippets/` 一次；講師機如果掛了那個目錄，在設定檔填 `template.snippets_dir` 就會直接寫進去。再跑一次就會匯入映像、第一次開機裝 tk8s、XFCE、xrdp 並預拉 node image，關機後轉成範本，約 15 分鐘。建置腳本任一步失敗 VM 會留著不關機，逾時後指令會叫你去看主控台。
 
 ## 權限
 
-PVE：專用使用者 `lab@pve` 與兩個 token。開班用的 token 只能 clone 範本、管理 `lab` 資源池內的 VM、在一個儲存上配置空間、使用一個 bridge；建範本用的 token 才能寫映像、引用 snippets（PVE 要求 `Datastore.Allocate`，這個權限也能刪該儲存上的 volume，所以範本建好後建議 `pveum user token remove lab@pve tkctl-build`，要重建再開）與讓節點抓網址。`/`、`/vms`、`/nodes` 上什麼都不給，所以碰不到 pool 外的 VM；`tkctl lab init` 印出完整的 `pveum` 指令。`node = "auto"` 會把 VM 輪流放到線上的節點（token 看不到節點記憶體，看得到時會優先放最空的）。需要 PVE 8 以上（`VM.GuestAgent.Audit`）、Guacamole 1.5 以上。Guacamole：專用帳號只有 `CREATE_USER` 與 `CREATE_CONNECTION`。學員在自己的 VM 裡有 sudo，VM 之間是硬體隔離。
+PVE：專用使用者 `lab@pve` 與兩個 token。開班用的 token 只能 clone 範本、管理 `lab` 資源池內的 VM、在一個儲存上配置空間、使用一個 bridge；建範本用的 token 才能寫映像、引用 snippets（PVE 要求 `Datastore.Allocate`，這個權限也能刪該儲存上的 volume，所以範本建好後建議 `pveum user token remove lab@pve tkctl-build`，要重建再開）與讓節點抓網址。`/`、`/vms`、`/nodes` 上什麼都不給，所以碰不到 pool 外的 VM；`tkctl lab init` 印出完整的 `pveum` 指令。`node = "auto"` 會把 VM 輪流放到線上的節點（token 看不到節點記憶體，看得到時會優先放最空的）。需要 PVE 8 以上（`VM.GuestAgent.Audit`）、Guacamole 1.5 以上。Guacamole：專用帳號只有 `CREATE_USER`、`CREATE_CONNECTION` 與 `CREATE_CONNECTION_GROUP`；它建出來的物件由它自己管理，碰不到別人的。學員在自己的 VM 裡有 sudo，VM 之間是硬體隔離。
 
 ## 授權
 

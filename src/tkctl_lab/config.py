@@ -89,7 +89,7 @@ bridge = "vmbr0"
 
 [guacamole]
 url = "https://guac.example"
-username = "tkctl-lab"           # service account with CREATE_USER and CREATE_CONNECTION only
+username = "tkctl-lab"           # may create users, connections and connection groups
 
 [vm]
 cores = 8

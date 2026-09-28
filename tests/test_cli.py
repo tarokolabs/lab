@@ -158,7 +158,9 @@ def test_init_writes_config_once_and_prints_pveum(tmp_path, monkeypatch, capsys)
     assert "pveum user token add lab@pve tkctl-build --privsep 1" in again
     # least privilege: no Sys.Audit anywhere, no VM.Monitor, no Pool.Audit; the runtime token
     # may only clone the template, and only the build token may write images or fetch URLs
-    assert "Sys.Audit" not in again and "VM.Monitor" not in again and "Pool.Audit" not in again
+    assert "Sys.Audit" not in again and "VM.Monitor" not in again
+    # /cluster/resources only carries the `pool` field for callers with Pool.Audit on that pool
+    assert re.search(r"role add TkctlLabClass .*Pool\.Audit", again)
     assert "Datastore.AllocateTemplate" in again and "Sys.AccessNetwork" in again
     # snippets are only visible with Datastore.Allocate (check_volume_access); build token only
     assert re.search(r"role add TkctlLabImage .*Datastore\.Allocate ", again + " ")

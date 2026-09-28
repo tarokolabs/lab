@@ -30,6 +30,7 @@ ROLES = {
         "VM.Config.Cloudinit",
         "VM.Config.Disk",
         "VM.GuestAgent.Audit",
+        "Pool.Audit",  # else /cluster/resources omits the pool field and classes are invisible
     ],
     "TkctlLabTemplateUse": ["VM.Audit", "VM.Clone"],
     "TkctlLabTemplateBuild": [

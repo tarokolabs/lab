@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import ssl
 import time
 import urllib.error
@@ -128,6 +129,62 @@ class Pve:
     def delete(self, node: str, vmid: int) -> str:
         params = {"purge": 1, "destroy-unreferenced-disks": 1}
         return self.request("DELETE", f"/nodes/{node}/qemu/{vmid}", params)
+
+    # --- template build
+    def download_url(
+        self,
+        node: str,
+        storage: str,
+        content: str,
+        url: str,
+        filename: str,
+        checksum: str,
+        algorithm: str = "sha512",
+    ) -> str:
+        params = {
+            "content": content,
+            "url": url,
+            "filename": filename,
+            "checksum": checksum,
+            "checksum-algorithm": algorithm,
+        }
+        return self.request("POST", f"/nodes/{node}/storage/{storage}/download-url", params)
+
+    def upload_snippet(self, node: str, storage: str, filename: str, content: bytes) -> str:
+        boundary = "----tkctl-lab-" + secrets.token_hex(8)
+        head = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="content"\r\n\r\nsnippets\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="filename"; '
+            f'filename="{filename}"\r\nContent-Type: application/octet-stream\r\n\r\n'
+        )
+        body = head.encode() + content + f"\r\n--{boundary}--\r\n".encode()
+        url = f"{self.base}/nodes/{node}/storage/{storage}/upload"
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Authorization", self.auth)
+        req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+        try:
+            with self.opener(req, timeout=120) as resp:
+                return json.loads(resp.read() or b"{}").get("data")
+        except urllib.error.HTTPError as e:
+            body_text = e.read().decode(errors="replace") if hasattr(e, "read") else ""
+            raise PveError(e.code, f"upload {filename}: {e.reason}: {_detail(body_text)}") from e
+
+    def create_vm(self, node: str, vmid: int, **kv) -> str:
+        return self.request("POST", f"/nodes/{node}/qemu", {"vmid": vmid, **kv})
+
+    def resize(self, node: str, vmid: int, disk: str, size: str) -> None:
+        self.request("PUT", f"/nodes/{node}/qemu/{vmid}/resize", {"disk": disk, "size": size})
+
+    def make_template(self, node: str, vmid: int) -> None:
+        self.request("POST", f"/nodes/{node}/qemu/{vmid}/template")
+
+    def wait_status(self, node: str, vmid: int, want: str, timeout: int = 1800) -> None:
+        elapsed = 0
+        while self.status(node, vmid) != want:
+            if elapsed >= timeout:
+                raise PveError(504, f"VM {vmid} did not reach {want} within {timeout}s")
+            self.sleep(10)
+            elapsed += 10
 
     def wait_task(self, node: str, upid: str, timeout: int = 300) -> None:
         elapsed = 0

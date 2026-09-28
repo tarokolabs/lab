@@ -10,7 +10,7 @@ url = "https://pve-node1:8006"
 token_id = "lab@pve!tkctl"
 node = "pve-node7"
 pool = "lab"
-storage = "nas-iscsi-lvm"
+storage = "nas-nfs"
 template = 3900
 vmid_range = [3100, 3199]
 bridge = "vmbr0"
@@ -57,7 +57,7 @@ def test_all_problems_listed_at_once(tmp_path):
     bad = (
         GOOD.replace("template = 3900", 'template = "3900"')
         .replace("vmid_range = [3100, 3199]", "vmid_range = [3199, 3100]")
-        .replace('storage = "nas-iscsi-lvm"', "")
+        .replace('storage = "nas-nfs"', "")
     )
     with pytest.raises(config.ConfigError) as e:
         config.load(write(tmp_path, bad))

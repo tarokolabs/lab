@@ -72,7 +72,8 @@ url = "https://pve-node1:8006"
 token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tkctl lab init` prints the pveum commands
 node = "auto"                    # node for new VMs; "auto" picks the one with the most free memory
 pool = "lab"                     # every VM this tool touches lives in this pool
-storage = "nas-iscsi-lvm"        # shared storage holding the template and its linked clones
+storage = "nas-nfs"              # shared storage with images, snippets and import content;
+                                 # linked clones need qcow2 (NFS/dir) or thin storage, not plain LVM
 template = 3900                  # template VMID (built by `tkctl lab create template`)
 vmid_range = [3100, 3199]        # VMIDs for student VMs
 bridge = "vmbr0"

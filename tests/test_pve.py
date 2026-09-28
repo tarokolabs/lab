@@ -165,3 +165,41 @@ def test_vm_node_finds_the_template_host():
     assert c.vm_node(3900) == "n1"
     with pytest.raises(pve.PveError, match="VM 4000 not found"):
         c.vm_node(4000)
+
+
+def test_download_url_and_upload_snippet():
+    routes = {
+        ("POST", "/nodes/n1/storage/nas-nfs/download-url"): "UPID:dl",
+        ("POST", "/nodes/n1/storage/nas-nfs/upload"): "UPID:up",
+    }
+    c, op = client(routes)
+    assert (
+        c.download_url("n1", "nas-nfs", "import", "https://x/i.qcow2", "i.qcow2", "ab") == "UPID:dl"
+    )
+    assert c.upload_snippet("n1", "nas-nfs", "u.yaml", b"#cloud-config\n") == "UPID:up"
+    (_, dl_body, _), (_, up_body, up_headers) = op.calls
+    assert "checksum-algorithm=sha512" in dl_body and "content=import" in dl_body
+    assert up_headers["Content-type"].startswith("multipart/form-data; boundary=")
+    assert 'name="content"\r\n\r\nsnippets' in up_body
+    assert 'filename="u.yaml"' in up_body and "#cloud-config" in up_body
+    assert up_headers["Authorization"] == "PVEAPIToken=lab@pve!tkctl=SECRET"
+
+
+def test_create_resize_template_and_wait_status():
+    seq = iter(["running", "stopped"])
+    routes = {
+        ("POST", "/nodes/n1/qemu"): "UPID:cr",
+        ("PUT", "/nodes/n1/qemu/3900/resize"): None,
+        ("POST", "/nodes/n1/qemu/3900/template"): None,
+        ("GET", "/nodes/n1/qemu/3900/status/current"): lambda req: {"status": next(seq)},
+    }
+    c, op = client(routes)
+    assert c.create_vm("n1", 3900, name="t", agent=1) == "UPID:cr"
+    c.resize("n1", 3900, "scsi0", "60G")
+    c.wait_status("n1", 3900, "stopped", timeout=60)
+    c.make_template("n1", 3900)
+    bodies = [b for (_, b, _) in op.calls]
+    assert bodies[0] == "vmid=3900&name=t&agent=1" and bodies[1] == "disk=scsi0&size=60G"
+    c2, _ = client({("GET", "/nodes/n1/qemu/3900/status/current"): {"status": "running"}})
+    with pytest.raises(pve.PveError, match="did not reach stopped"):
+        c2.wait_status("n1", 3900, "stopped", timeout=20)

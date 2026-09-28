@@ -99,6 +99,12 @@ class Pve:
             raise PveError(503, "no online node")
         return max(nodes, key=lambda n: n.get("maxmem", 0) - n.get("mem", 0))["node"]
 
+    def vm_node(self, vmid: int) -> str:
+        for r in self.resources("vm"):
+            if r.get("vmid") == vmid:
+                return r["node"]
+        raise PveError(404, f"VM {vmid} not found in the cluster")
+
     def pool_vms(self, pool: str) -> list[dict]:
         return [r for r in self.resources("vm") if r.get("pool") == pool]
 

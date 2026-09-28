@@ -154,3 +154,14 @@ def test_certificate_error_points_at_ca_file():
     c, _ = client({("GET", "/cluster/resources"): err})
     with pytest.raises(pve.PveError, match=r"pve\.ca_file"):
         c.resources("vm")
+
+
+def test_vm_node_finds_the_template_host():
+    res = [
+        {"vmid": 3900, "type": "qemu", "node": "n1"},
+        {"vmid": 100, "type": "qemu", "node": "n2"},
+    ]
+    c, _ = client({("GET", "/cluster/resources"): res})
+    assert c.vm_node(3900) == "n1"
+    with pytest.raises(pve.PveError, match="VM 4000 not found"):
+        c.vm_node(4000)

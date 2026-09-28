@@ -121,3 +121,12 @@ def test_snippets_dir_is_optional(tmp_path):
         else GOOD.replace("[template]\n", '[template]\nsnippets_dir = "/mnt/snippets"\n')
     )
     assert config.load(p).template.snippets_dir == "/mnt/snippets"
+
+
+def test_guac_totp_secret_is_optional(monkeypatch):
+    monkeypatch.setenv("TK_LAB_PVE_TOKEN", "t")
+    monkeypatch.setenv("TK_LAB_GUAC_PASSWORD", "p")
+    monkeypatch.delenv("TK_LAB_GUAC_TOTP_SECRET", raising=False)
+    assert config.secrets().guac_totp is None
+    monkeypatch.setenv("TK_LAB_GUAC_TOTP_SECRET", "GEZD")
+    assert config.secrets().guac_totp == "GEZD"

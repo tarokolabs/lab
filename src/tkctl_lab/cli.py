@@ -88,7 +88,12 @@ log = functools.partial(print, flush=True)
 
 def _clients(cfg: config.Config, sec: config.Secrets):
     pve = Pve(cfg.pve.url, cfg.pve.token_id, sec.pve_token, ca_file=cfg.pve.ca_file)
-    guac = Guac(cfg.guacamole.url, cfg.guacamole.username, sec.guac_password or "")
+    guac = Guac(
+        cfg.guacamole.url,
+        cfg.guacamole.username,
+        sec.guac_password or "",
+        totp_secret=sec.guac_totp,
+    )
     return pve, guac
 
 

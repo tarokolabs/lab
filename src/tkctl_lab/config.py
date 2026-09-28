@@ -61,16 +61,19 @@ class Config:
 class Secrets:
     pve_token: str
     guac_password: str | None  # None when the command does not talk to Guacamole
+    guac_totp: str | None = None  # TOTP secret of the service account, when Guacamole demands one
 
 
 PVE_TOKEN_ENV = "TK_LAB_PVE_TOKEN"
 PVE_BUILD_TOKEN_ENV = "TK_LAB_PVE_BUILD_TOKEN"
 GUAC_PASSWORD_ENV = "TK_LAB_GUAC_PASSWORD"
+GUAC_TOTP_ENV = "TK_LAB_GUAC_TOTP_SECRET"
 
 INIT_TEMPLATE = """# tkctl lab configuration. Secrets never go here:
 #   TK_LAB_PVE_TOKEN        the PVE API token secret (classes)
 #   TK_LAB_PVE_BUILD_TOKEN  the build token secret (`create template` only)
 #   TK_LAB_GUAC_PASSWORD    the Guacamole service account password
+#   TK_LAB_GUAC_TOTP_SECRET the account's TOTP secret, only when Guacamole enforces TOTP
 [pve]
 url = "https://pve-node1:8006"
 token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tkctl lab init` prints the pveum commands
@@ -127,7 +130,7 @@ def secrets(*, guacamole: bool = True) -> Secrets:
     if missing:
         raise ConfigError("missing environment variable(s): " + ", ".join(missing))
     guac = os.environ[GUAC_PASSWORD_ENV] if guacamole else None
-    return Secrets(os.environ[PVE_TOKEN_ENV], guac)
+    return Secrets(os.environ[PVE_TOKEN_ENV], guac, os.environ.get(GUAC_TOTP_ENV) or None)
 
 
 def _is_int(value: object) -> bool:

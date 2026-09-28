@@ -144,3 +144,45 @@ def test_error_message_from_guacamole():
     c, _ = client({("POST", f"{DS}/users"): err})
     with pytest.raises(guac.GuacError, match="Username already exists"):
         c.create_user("alice", "x")
+
+
+def test_totp_matches_rfc6238_vector():
+    # RFC 6238 appendix B, SHA-1, secret "12345678901234567890" at T=59 → 94287082 (8 digits)
+    secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+    assert guac.totp(secret, at=59) == "287082"
+    assert guac.totp(secret, at=1111111109) == "081804"
+    assert guac.totp("gezd gnbv gy3t qojq gezd gnbv gy3t qojq", at=59) == "287082"  # spaced/lower
+
+
+def test_login_answers_a_totp_challenge_when_a_secret_is_configured():
+    challenge = {
+        "message": "Verification code required",
+        "expected": [{"name": "guac-totp", "type": "GUACAMOLE_TOTP_CODE"}],
+        "type": "INSUFFICIENT_CREDENTIALS",
+    }
+    calls = []
+
+    def tokens(req, body):
+        calls.append(body)
+        if "guac-totp=" not in body:
+            payload = BytesIO(json.dumps(challenge).encode())
+            return urllib.error.HTTPError("u", 403, "Forbidden", {}, payload)
+        return {"authToken": "T", "dataSource": "postgresql"}
+
+    op = opener_with({("POST", "/tokens"): tokens})
+    c = guac.Guac(
+        "https://guac", "svc", "pw", totp_secret="GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", opener=op
+    )
+    c.login()
+    assert len(calls) == 2 and calls[0] == "username=svc&password=pw"
+    assert calls[1].startswith("username=svc&password=pw&guac-totp=")
+    assert len(calls[1].rsplit("=", 1)[1]) == 6
+
+
+def test_login_without_secret_reports_the_totp_requirement():
+    challenge = {"message": "Verification code required", "expected": [{"name": "guac-totp"}]}
+    payload = BytesIO(json.dumps(challenge).encode())
+    err = urllib.error.HTTPError("u", 403, "Forbidden", {}, payload)
+    op = opener_with({("POST", "/tokens"): err})
+    with pytest.raises(guac.GuacError, match="TK_LAB_GUAC_TOTP_SECRET"):
+        guac.Guac("https://guac", "svc", "pw", opener=op).login()

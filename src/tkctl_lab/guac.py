@@ -212,6 +212,13 @@ class Guac:
             self._call("DELETE", f"/tokens/{self.token}")
             self.token = None
 
+    def enrol(self, code: str) -> None:
+        """Answer an enrolment challenge with a code computed from the offered secret."""
+        creds = {"username": self.username, "password": self.password, TOTP_FIELD: code}
+        r = self._call("POST", "/tokens", creds, form=True)
+        self._call("DELETE", f"/tokens/{r['authToken']}")
+        self.token = None
+
     def create_user(self, username: str, password: str) -> None:
         self._data("POST", "/users", {"username": username, "password": password, "attributes": {}})
 

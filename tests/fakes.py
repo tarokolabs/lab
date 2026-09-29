@@ -286,3 +286,57 @@ class FakePveAdmin:
 
     def vmid_free(self, vmid):
         return True
+
+
+class FakeGuacAdmin:
+    """Admin-side Guacamole for setup tests; also fakes the service account's own login."""
+
+    def __init__(self, *, users=None, perms=None, totp="off"):
+        # totp: "off" (no extension), "fresh" (challenge offers a secret), "enrolled" (no secret)
+        self.users = dict(users or {})  # username -> password
+        self.perms = {k: set(v) for k, v in (perms or {}).items()}
+        self.totp = totp
+        self.enrolled_secret = None
+        self.calls: list[tuple] = []
+
+    def get_user(self, username):
+        return {"username": username, "attributes": {}} if username in self.users else None
+
+    def create_user(self, username, password):
+        self.calls.append(("create_user", username))
+        self.users[username] = password
+
+    def set_password(self, username, password):
+        self.calls.append(("set_password", username))
+        self.users[username] = password
+
+    def system_permissions(self, username):
+        return set(self.perms.get(username, set()))
+
+    def grant_system(self, username, perms):
+        self.calls.append(("grant_system", username, list(perms)))
+        self.perms.setdefault(username, set()).update(perms)
+
+    def clear_totp(self, username):
+        self.calls.append(("clear_totp", username))
+        self.totp = "fresh"
+        self.enrolled_secret = None
+
+    def logout(self):
+        self.calls.append(("logout",))
+
+    # --- the service account logging in through the same fake
+    def service_login(self, username, password, totp_secret):
+        if self.users.get(username) != password:
+            raise GuacError(
+                403, "Invalid login", {"expected": [{"name": "username"}, {"name": "password"}]}
+            )
+        if self.totp == "off":
+            return {"secret": None}
+        if self.totp == "fresh":
+            self.totp = "enrolled"
+            self.enrolled_secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+            return {"secret": self.enrolled_secret}
+        if totp_secret == self.enrolled_secret:
+            return {"secret": None}
+        raise GuacError(403, "Verification code required", {"expected": [{"name": "guac-totp"}]})

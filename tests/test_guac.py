@@ -277,3 +277,17 @@ def test_admin_user_methods_shapes():
     ]
     assert ("DELETE", "/tokens/T") in [k for (k, _, _) in op.calls]
     assert c.token is None
+
+
+def test_enrol_posts_the_code_and_drops_the_session():
+    calls = []
+
+    def tokens(req, body):
+        calls.append(body)
+        return {"authToken": "T2", "dataSource": "mysql"}
+
+    op = opener_with({("POST", "/tokens"): tokens, ("DELETE", "/tokens/T2"): None})
+    c = guac.Guac("https://guac", "svc", "pw", opener=op)
+    c.enrol("123456")
+    assert calls == ["username=svc&password=pw&guac-totp=123456"]
+    assert ("DELETE", "/tokens/T2") in [k for (k, _, _) in op.calls] and c.token is None

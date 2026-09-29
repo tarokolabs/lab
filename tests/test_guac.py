@@ -217,3 +217,77 @@ def test_login_retries_a_rejected_totp_code_on_the_next_period():
     c.login()
     assert len(calls) == 3 and c.data_source == "mysql"
     assert 0 < slept[0] <= 31
+
+
+def test_challenge_parses_totp_field():
+    body = {"expected": [{"name": "guac-totp", "secret": "GEZD", "digits": 6}]}
+    err = guac.GuacError(403, "x", body)
+    assert guac.challenge(err) == {"name": "guac-totp", "secret": "GEZD", "digits": 6}
+    other = guac.GuacError(403, "x", {"expected": [{"name": "username"}]})
+    assert guac.challenge(other) is None
+    assert guac.challenge(guac.GuacError(400, "x", {})) is None
+
+
+def test_login_accepts_a_one_time_code():
+    challenge = {"expected": [{"name": "guac-totp"}]}
+    calls = []
+
+    def tokens(req, body):
+        calls.append(body)
+        if "guac-totp=" not in body:
+            payload = BytesIO(json.dumps(challenge).encode())
+            return urllib.error.HTTPError("u", 403, "F", {}, payload)
+        return {"authToken": "T", "dataSource": "mysql"}
+
+    c = guac.Guac("https://guac", "admin", "pw", opener=opener_with({("POST", "/tokens"): tokens}))
+    c.login(totp="654321")
+    assert calls[1].endswith("&guac-totp=654321")
+
+
+def test_admin_user_methods_shapes():
+    missing = urllib.error.HTTPError(
+        "u", 404, "Not Found", {}, BytesIO(b'{"message":"no such user"}')
+    )
+    routes = {
+        ("GET", f"{DS}/users/nobody"): missing,
+        ("GET", f"{DS}/users/tkctl-lab"): {"username": "tkctl-lab", "attributes": {}},
+        ("PUT", f"{DS}/users/tkctl-lab"): None,
+        ("GET", f"{DS}/users/tkctl-lab/permissions"): {
+            "systemPermissions": ["CREATE_USER"],
+            "connectionPermissions": {},
+        },
+        ("PATCH", f"{DS}/users/tkctl-lab/permissions"): None,
+        ("DELETE", "/tokens/T"): None,
+    }
+    c, op = client(routes)
+    assert c.get_user("nobody") is None
+    assert c.get_user("tkctl-lab")["username"] == "tkctl-lab"
+    c.set_password("tkctl-lab", "new-pw")
+    assert c.system_permissions("tkctl-lab") == {"CREATE_USER"}
+    c.grant_system("tkctl-lab", ["CREATE_CONNECTION", "CREATE_CONNECTION_GROUP"])
+    c.clear_totp("tkctl-lab")
+    c.logout()
+    b = bodies(op)
+    puts = [json.loads(x) for (k, x, _) in op.calls if k == ("PUT", f"{DS}/users/tkctl-lab") and x]
+    assert puts[0] == {"username": "tkctl-lab", "password": "new-pw", "attributes": {}}
+    assert puts[1]["attributes"] == {"guac-totp-key-secret": "", "guac-totp-key-confirmed": "false"}
+    assert b[("PATCH", f"{DS}/users/tkctl-lab/permissions")] == [
+        {"op": "add", "path": "/systemPermissions", "value": "CREATE_CONNECTION"},
+        {"op": "add", "path": "/systemPermissions", "value": "CREATE_CONNECTION_GROUP"},
+    ]
+    assert ("DELETE", "/tokens/T") in [k for (k, _, _) in op.calls]
+    assert c.token is None
+
+
+def test_enrol_posts_the_code_and_drops_the_session():
+    calls = []
+
+    def tokens(req, body):
+        calls.append(body)
+        return {"authToken": "T2", "dataSource": "mysql"}
+
+    op = opener_with({("POST", "/tokens"): tokens, ("DELETE", "/tokens/T2"): None})
+    c = guac.Guac("https://guac", "svc", "pw", opener=op)
+    c.enrol("123456")
+    assert calls == ["username=svc&password=pw&guac-totp=123456"]
+    assert ("DELETE", "/tokens/T2") in [k for (k, _, _) in op.calls] and c.token is None

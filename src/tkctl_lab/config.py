@@ -69,16 +69,17 @@ PVE_BUILD_TOKEN_ENV = "TK_LAB_PVE_BUILD_TOKEN"
 GUAC_PASSWORD_ENV = "TK_LAB_GUAC_PASSWORD"
 GUAC_TOTP_ENV = "TK_LAB_GUAC_TOTP_SECRET"
 
-INIT_TEMPLATE = """# tkctl lab configuration. Secrets never go here:
+INIT_TEMPLATE = """# tkctl lab configuration. Secrets live in lab.env next to this file (written by
+# `tkctl lab init`, mode 0600) or in the environment, which wins:
 #   TK_LAB_PVE_TOKEN        the PVE API token secret (classes)
 #   TK_LAB_PVE_BUILD_TOKEN  the build token secret (`create template` only)
 #   TK_LAB_GUAC_PASSWORD    the Guacamole service account password
 #   TK_LAB_GUAC_TOTP_SECRET the account's TOTP secret, only when Guacamole enforces TOTP
 [pve]
 url = "https://pve-node1:8006"
-token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tkctl lab init` prints the pveum commands
+token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tkctl lab init` creates it
 build_token_id = "lab@pve!tkctl-build"   # may write images and fetch URLs; used by create template
-node = "auto"                    # node for new VMs; "auto" picks the one with the most free memory
+node = "auto"                    # node for new VMs; "auto" spreads them over the online nodes
 pool = "lab"                     # every VM this tool touches lives in this pool
 storage = "nas-nfs"              # shared storage with images, snippets and import content;
                                  # linked clones need qcow2 (NFS/dir) or thin storage, not plain LVM
@@ -100,7 +101,7 @@ disk = "60G"
 [template]
 image_url = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
 image_sha512 = "replace-with-the-value-from-SHA512SUMS"
-tk8s_version = "v2026.10.0"     # tag or branch install.sh checks out
+tk8s_version = "v2026.10.1"     # tag or branch install.sh checks out
 k8s = "1.37.0"                   # node image pre-pulled into the template
 # snippets_dir = "/mnt/snippets"  # pve.storage's snippets/ mounted here; the build writes it there
 """
@@ -116,8 +117,17 @@ def state_dir() -> Path:
     return Path(base) / "tkctl" / "lab"
 
 
+def merged_env() -> dict[str, str]:
+    """Real environment first; the instructor's env file fills in what is missing."""
+    from . import envfile
+
+    merged = envfile.read(envfile.path())
+    merged.update({k: v for k, v in os.environ.items() if k in envfile.KEYS})
+    return merged
+
+
 def build_secret(environ: dict | None = None) -> str:
-    env = os.environ if environ is None else environ
+    env = merged_env() if environ is None else environ
     value = env.get(PVE_BUILD_TOKEN_ENV)
     if not value:
         raise ConfigError(f"missing environment variable: {PVE_BUILD_TOKEN_ENV}")
@@ -125,12 +135,13 @@ def build_secret(environ: dict | None = None) -> str:
 
 
 def secrets(*, guacamole: bool = True) -> Secrets:
+    env = merged_env()
     wanted = (PVE_TOKEN_ENV, GUAC_PASSWORD_ENV) if guacamole else (PVE_TOKEN_ENV,)
-    missing = [v for v in wanted if not os.environ.get(v)]
+    missing = [v for v in wanted if not env.get(v)]
     if missing:
         raise ConfigError("missing environment variable(s): " + ", ".join(missing))
-    guac = os.environ[GUAC_PASSWORD_ENV] if guacamole else None
-    return Secrets(os.environ[PVE_TOKEN_ENV], guac, os.environ.get(GUAC_TOTP_ENV) or None)
+    guac = env[GUAC_PASSWORD_ENV] if guacamole else None
+    return Secrets(env[PVE_TOKEN_ENV], guac, env.get(GUAC_TOTP_ENV) or None)
 
 
 def _is_int(value: object) -> bool:

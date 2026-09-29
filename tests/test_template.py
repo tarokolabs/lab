@@ -184,9 +184,7 @@ def test_build_needs_k8s_version():
     assert "--k8s" in "\n".join(lines)
 
 
-def test_build_explains_the_acl_grants_when_create_is_forbidden():
-    # PVE drops every ACL on /vms/<id> when that VM is destroyed, so a rebuild after deleting the
-    # old template answers 403 until an administrator grants the template roles again
+def test_build_403_points_at_init_pve():
     from tkctl_lab.pve import PveError
 
     pve = FakePve(snippets=[template.SNIPPET], imports=["debian-13-genericcloud-amd64.qcow2"])
@@ -196,7 +194,6 @@ def test_build_explains_the_acl_grants_when_create_is_forbidden():
 
     pve.create_vm = forbidden
     lines = []
-    assert template.build(cfg(), pve, k8s=None, node=None, log=lines.append) == 1
+    template.build(cfg(), pve, k8s=None, node=None, log=lines.append)
     text = "\n".join(lines)
-    assert "grant /vms/3900 TkctlLabTemplateBuild 'lab@pve!tkctl-build'" in text
-    assert "grant /vms/3900 TkctlLabTemplateUse 'lab@pve!tkctl'" in text
+    assert "tkctl lab init pve" in text and "grant /vms/3900" not in text

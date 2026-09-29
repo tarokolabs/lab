@@ -3,85 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import functools
+import getpass
 import os
 import sys
-import tomllib
 from datetime import date
 from pathlib import Path
 
-from . import __version__, classdef, config, provision, roster
+from . import __version__, classdef, config, envfile, prompt, provision, roster, setup
+from . import guac as guacmod
 from .guac import Guac, GuacError
-from .pve import Pve, PveError
-
-# Least privilege. Two tokens on one user: the class token can clone the template and manage
-# VMs in the lab pool only; the build token, used by `create template` alone, may also write
-# images to the storage and make the node fetch a URL. Nothing is granted on /, /vms or /nodes
-# for VMs, so VMs outside the pool stay out of reach. Both the user and each token need the
-# ACLs because the tokens are privilege-separated.
-ROLES = {
-    "TkctlLabClass": [
-        "VM.Audit",
-        "VM.Allocate",
-        "VM.PowerMgmt",
-        "VM.Config.CPU",
-        "VM.Config.Memory",
-        "VM.Config.Options",
-        "VM.Config.Cloudinit",
-        "VM.Config.Disk",
-        "VM.GuestAgent.Audit",
-        "Pool.Audit",  # else /cluster/resources omits the pool field and classes are invisible
-    ],
-    "TkctlLabTemplateUse": ["VM.Audit", "VM.Clone"],
-    "TkctlLabTemplateBuild": [
-        "VM.Audit",
-        "VM.Allocate",
-        "VM.PowerMgmt",
-        "VM.Config.CPU",
-        "VM.Config.Memory",
-        "VM.Config.Options",
-        "VM.Config.Cloudinit",
-        "VM.Config.Disk",
-        "VM.Config.HWType",
-        "VM.Config.Network",
-    ],
-    "TkctlLabDisk": ["Datastore.AllocateSpace", "Datastore.Audit"],
-    # Datastore.Allocate: PVE only lets a caller see or reference snippets with it. It also allows
-    # deleting volumes on the storage, so it sits on the build token alone; remove that token
-    # once the template exists.
-    "TkctlLabImage": [
-        "Datastore.AllocateSpace",
-        "Datastore.AllocateTemplate",
-        "Datastore.Allocate",
-        "Datastore.Audit",
-    ],
-    "TkctlLabBridge": ["SDN.Use"],
-    "TkctlLabFetch": ["Sys.AccessNetwork"],
-}
-PVE_SETUP = """# Run once as a PVE administrator.
-{roles}
-pveum user add lab@pve --comment "tkctl lab service account"
-pveum pool add {pool} --comment "tkctl lab classes"
-pveum user token add lab@pve tkctl --privsep 1        # -> {token_env}
-pveum user token add lab@pve tkctl-build --privsep 1  # -> {build_env}
-grant() {{  # path role token: the user and the privilege-separated token both need the ACL
-  pveum acl modify "$1" --users lab@pve --roles "$2"
-  pveum acl modify "$1" --tokens "$3" --roles "$2"
-}}
-grant /pool/{pool} TkctlLabClass 'lab@pve!tkctl'
-grant /vms/{template} TkctlLabTemplateUse 'lab@pve!tkctl'
-grant /storage/{storage} TkctlLabDisk 'lab@pve!tkctl'
-grant /sdn/zones/localnetwork/{bridge} TkctlLabBridge 'lab@pve!tkctl'
-grant /vms/{template} TkctlLabTemplateBuild 'lab@pve!tkctl-build'
-grant /storage/{storage} TkctlLabImage 'lab@pve!tkctl-build'
-grant /sdn/zones/localnetwork/{bridge} TkctlLabBridge 'lab@pve!tkctl-build'
-grant /nodes/{build_node} TkctlLabFetch 'lab@pve!tkctl-build'
-"""
-
-
-def _role_lines() -> str:
-    return "\n".join(f'pveum role add {r} --privs "{" ".join(p)}"' for r, p in ROLES.items())
-
+from .pve import Pve, PveAdmin, PveError
 
 # Progress lines go out immediately even when stdout is a log file.
 log = functools.partial(print, flush=True)
@@ -134,9 +67,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--version", action="version", version=__version__)
     verbs = p.add_subparsers(dest="verb", required=True)
-    verbs.add_parser(
-        "init", help="write the config template (kept if present) and print the PVE setup commands"
+    init_p = verbs.add_parser(
+        "init", help="set up the config, PVE and Guacamole (all, or one side)"
     )
+    init_p.add_argument("noun", nargs="?", choices=["pve", "guacamole"], help="only this side")
+    init_p.add_argument(
+        "--manual", action="store_true", help="print what to do by hand instead of doing it"
+    )
+    init_p.add_argument("-f", "--file", type=Path, help="use this config file")
+    init_p.add_argument("--force", action="store_true", help="replace an existing config with -f")
+    for flag in (
+        "pve-url",
+        "pve-admin",
+        "node",
+        "pool",
+        "storage",
+        "bridge",
+        "guacamole-url",
+        "guacamole-admin",
+        "vmid-range",
+    ):
+        init_p.add_argument(f"--{flag}")
+    init_p.add_argument("--template", type=int)
 
     create = verbs.add_parser("create", help="create a class or the template")
     create_nouns = create.add_subparsers(dest="noun", required=True)
@@ -176,35 +128,190 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _init() -> int:
-    p = config.config_path()
-    if p.exists():
-        print(f"config: {p} (kept)")
-    else:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(config.INIT_TEMPLATE)
-        envs = f"{config.PVE_TOKEN_ENV} and {config.GUAC_PASSWORD_ENV}"
-        print(f"wrote {p}; fill it in, then export {envs}")
-    # The pveum commands only need the resource names, so a half-filled config is fine here.
-    try:
-        pve = tomllib.loads(p.read_text()).get("pve", {})
-    except tomllib.TOMLDecodeError, OSError:
-        pve = {}
-    node = pve.get("node", "auto")
-    print(
-        PVE_SETUP.format(
-            roles=_role_lines(),
-            pool=pve.get("pool", "lab"),
-            template=pve.get("template", 3900),
-            storage=pve.get("storage", "nas-nfs"),
-            bridge=pve.get("bridge", "vmbr0"),
-            build_node=node if node != "auto" else "<node given to create template --node>",
-            token_env=config.PVE_TOKEN_ENV,
-            build_env=config.PVE_BUILD_TOKEN_ENV,
-        ),
-        end="",
-    )
-    return 0
+FLAG_KEYS = (
+    "pve_url",
+    "pve_admin",
+    "node",
+    "pool",
+    "storage",
+    "bridge",
+    "template",
+    "vmid_range",
+    "guacamole_url",
+    "guacamole_admin",
+)
+PVE_ADMIN_PRIVS = "Permissions.Modify, Realm.AllocateUser, Pool.Allocate, Sys.Modify"
+
+
+def _report(section: str, results: list[tuple[str, str]]) -> None:
+    for item, result in results:
+        print(f"{section}: {item}: {result}")
+
+
+class _Init:
+    """One `tkctl lab init` run: config, then PVE, then Guacamole, with injectable dependencies."""
+
+    def __init__(self, args, deps: dict):
+        self.args = args
+        self.make_admin = deps.get("make_admin") or (
+            lambda url, user, pw, ca_file=None: PveAdmin(url, user, pw, ca_file=ca_file)
+        )
+        self.make_guac_admin = deps.get("make_guac_admin") or (
+            lambda url, user, pw, code: Guac(url, user, pw)
+        )
+        self.make_service_client = deps.get("make_service_client") or (
+            lambda url, user, pw, secret: Guac(url, user, pw, totp_secret=secret)
+        )
+        self.ask_text = deps.get("ask_text") or (
+            lambda q, d: input(f"{q} [{d}]: " if d else f"{q}: ").strip() or d
+        )
+        self.ask_secret = deps.get("ask_secret") or (lambda q: getpass.getpass(f"{q}: "))
+        # Questions are only possible on a terminal (or when a test injects the askers).
+        tty = deps.get("tty")
+        if tty is None:
+            tty = deps.get("ask_secret") is not None or sys.stdin.isatty()
+        self.can_ask = tty
+        self.fetch = deps.get("fetch") or setup._http_get
+        # The CA fetched by an earlier `init pve` (or copied there by hand) works before any config.
+        well_known = config.config_path().parent / "pve-root-ca.pem"
+        self.ca_file: str | None = str(well_known) if well_known.exists() else None
+        self.pve_admin = None  # a logged-in PveAdmin gathered interactively
+        self.guac_admin = None  # a logged-in Guac admin client gathered interactively
+
+    # --- credentials
+    def admin_factory(self, url: str, user: str, password: str):
+        admin = self.make_admin(url, user, password, ca_file=self.ca_file)
+        admin.login()
+        self.pve_admin = admin
+        return admin
+
+    def guac_login(self, url: str, user: str, password: str, code: str | None) -> None:
+        client = self.make_guac_admin(url, user, password, code)
+        login = getattr(client, "login", None)
+        if login is not None:
+            login(totp=code) if code else login()
+        self.guac_admin = client
+
+    def interactive(self) -> setup.Answers:
+        answers, _, _ = prompt.ask(
+            admin_factory=self.admin_factory,
+            ask_text=self.ask_text,
+            ask_secret=self.ask_secret,
+            guac_login=self.guac_login,
+        )
+        sha = setup.fetch_sha512(setup.DEFAULT_IMAGE, fetch=self.fetch)
+        return dataclasses.replace(answers, image_sha512=sha)
+
+    # --- the three sections
+    def run(self) -> int:
+        args = self.args
+        only = args.noun
+        flags = {k: getattr(args, k) for k in FLAG_KEYS}
+        try:
+            cfg, state = setup.ensure_config(
+                path=config.config_path(),
+                flags=flags,
+                file=args.file,
+                force=args.force,
+                interactive=self.interactive if (self.can_ask and not args.manual) else None,
+                fetch=self.fetch,
+            )
+        except setup.SetupError as e:
+            return _fail(str(e))
+        print(f"config: {state} ({config.config_path()})")
+        self.ca_file = (
+            cfg.pve.ca_file if cfg.pve.ca_file and Path(cfg.pve.ca_file).exists() else None
+        )
+
+        if args.manual:
+            if only != "guacamole":
+                print(setup.manual_pve(cfg, None), end="")
+            if only != "pve":
+                print(setup.manual_guacamole(cfg), end="")
+            return 0
+
+        env = config.merged_env()
+        if only != "guacamole":
+            rc = self.pve(cfg, flags, env)
+            if rc:
+                return rc
+        if only != "pve":
+            rc = self.guacamole(cfg, flags, env)
+            if rc:
+                return rc
+        print("next: tkctl lab create template")
+        return 0
+
+    def pve(self, cfg, flags, env) -> int:
+        admin = self.pve_admin
+        if admin is None:
+            pw = os.environ.get("TK_LAB_PVE_ADMIN_PASSWORD")
+            user = flags.get("pve_admin") or setup.DEFAULTS["pve_admin"]
+            try:
+                if pw:
+                    admin = self.admin_factory(cfg.pve.url, user, pw)
+                elif self.can_ask:
+                    admin, _ = prompt.pve_login(
+                        self.ask_text, self.ask_secret, self.admin_factory, cfg.pve.url
+                    )
+                else:
+                    return _fail(
+                        "set TK_LAB_PVE_ADMIN_PASSWORD (or run `tkctl lab init` on a terminal)"
+                    )
+            except PveError as e:
+                return _fail(f"pve: {e}", 1)
+        ca_path = config.config_path().parent / "pve-root-ca.pem"
+        try:
+            results, new_env = setup.reconcile_pve(cfg, admin, env, ca_path=ca_path)
+        except PveError as e:
+            hint = f" (needs {PVE_ADMIN_PRIVS}; or use --manual)" if e.status == 403 else ""
+            return _fail(f"pve: {e}{hint}", 1)
+        _report("pve", results)
+        self._store(new_env, env)
+        return 0
+
+    def guacamole(self, cfg, flags, env) -> int:
+        gadmin = self.guac_admin
+        if gadmin is None:
+            pw = os.environ.get("TK_LAB_GUAC_ADMIN_PASSWORD")
+            user = flags.get("guacamole_admin") or setup.DEFAULTS["guacamole_admin"]
+            try:
+                if pw:
+                    self.guac_login(cfg.guacamole.url, user, pw, None)
+                elif self.can_ask:
+                    prompt.guac_admin_login(
+                        self.ask_text, self.ask_secret, self.guac_login, cfg.guacamole.url
+                    )
+                else:
+                    return _fail(
+                        "set TK_LAB_GUAC_ADMIN_PASSWORD (or run `tkctl lab init` on a terminal)"
+                    )
+            except GuacError as e:
+                if guacmod.challenge(e) is not None:
+                    return _fail(
+                        f"guacamole: administrator {user} needs a TOTP code; "
+                        "run `tkctl lab init` interactively or use --manual",
+                        1,
+                    )
+                return _fail(f"guacamole: {e}", 1)
+            gadmin = self.guac_admin
+        url = cfg.guacamole.url
+        try:
+            results, new_env = setup.reconcile_guacamole(
+                cfg, gadmin, env, make_client=lambda u, p, s: self.make_service_client(url, u, p, s)
+            )
+        except GuacError as e:
+            return _fail(f"guacamole: {e}", 1)
+        _report("guacamole", results)
+        self._store(new_env, env)
+        return 0
+
+    @staticmethod
+    def _store(new_env: dict[str, str], env: dict[str, str]) -> None:
+        if new_env:
+            envfile.write(envfile.path(), new_env)
+            env.update(new_env)
+            print(f"wrote {envfile.path()}")
 
 
 def _create_class(args, cfg, pve, guac) -> int:
@@ -316,10 +423,39 @@ def _dispatch(args, *, make_clients, make_build_client) -> int:
     return 2
 
 
-def main(argv: list[str] | None = None, *, make_clients=None, make_build_client=None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    make_clients=None,
+    make_build_client=None,
+    make_admin=None,
+    make_guac_admin=None,
+    make_service_client=None,
+    ask_text=None,
+    ask_secret=None,
+    fetch=None,
+    tty=None,
+) -> int:
     args = build_parser().parse_args(argv)
     if args.verb == "init":
-        return _init()
+        deps = dict(
+            make_admin=make_admin,
+            make_guac_admin=make_guac_admin,
+            make_service_client=make_service_client,
+            ask_text=ask_text,
+            ask_secret=ask_secret,
+            fetch=fetch,
+            tty=tty,
+        )
+        try:
+            return _Init(args, deps).run()
+        except config.ConfigError as e:
+            return _fail(str(e))
+        except (PveError, GuacError) as e:
+            return _fail(str(e), 1)
+        except KeyboardInterrupt:
+            print("\naborted; nothing written", file=sys.stderr)
+            return 1
     try:
         return _dispatch(args, make_clients=make_clients, make_build_client=make_build_client)
     except config.ConfigError as e:

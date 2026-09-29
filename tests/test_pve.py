@@ -238,3 +238,127 @@ def test_default_tls_context_verifies_but_is_not_rfc5280_strict(tmp_path):
     assert not ctx.verify_flags & ssl.VERIFY_X509_STRICT
     c = pve.Pve("https://pve:8006", "t", "s")  # builds the default opener without error
     assert c.opener is not None
+
+
+def admin(routes):
+    op = opener_with(routes)
+    return pve.PveAdmin("https://pve:8006", "root@pam", "hunter2", opener=op), op
+
+
+TICKET = {
+    ("POST", "/access/ticket"): {"ticket": "PVE:root@pam:ABC", "CSRFPreventionToken": "CSRF:1"}
+}
+
+
+def test_ticket_login_sets_cookie_and_csrf_on_writes():
+    c, op = admin(TICKET | {("GET", "/access/roles"): [], ("POST", "/access/roles"): None})
+    assert c.roles() == {}
+    c.role_add("TkctlLabX", ["VM.Audit", "VM.Clone"])
+    (_, login_body, _), (_, _, get_h), (_, post_body, post_h) = op.calls
+    assert login_body == "username=root%40pam&password=hunter2"
+    assert get_h["Cookie"] == "PVEAuthCookie=PVE:root@pam:ABC"
+    assert "Csrfpreventiontoken" not in get_h
+    assert post_h["Csrfpreventiontoken"] == "CSRF:1"
+    assert post_body == "roleid=TkctlLabX&privs=VM.Audit%2CVM.Clone"
+
+
+def test_ticket_login_reports_tfa():
+    need = {"ticket": "PVE:!tfa!abc", "CSRFPreventionToken": "x", "NeedTFA": 1}
+    c, _ = admin({("POST", "/access/ticket"): need})
+    with pytest.raises(pve.PveError) as e:
+        c.login()
+    assert "TFA" in str(e.value) and "hunter2" not in str(e.value)
+    seq = iter([need, {"ticket": "PVE:root@pam:OK", "CSRFPreventionToken": "y"}])
+    c2, op = admin({("POST", "/access/ticket"): lambda req: next(seq)})
+    c2.login(totp="123456")
+    body = op.calls[1][1]
+    assert "tfa-challenge=PVE%3A%21tfa%21abc" in body and "password=totp%3A123456" in body
+
+
+def test_admin_inventory_shapes():
+    routes = TICKET | {
+        ("GET", "/access/roles"): [
+            {"roleid": "TkctlLabA", "privs": "VM.Audit,VM.Clone"},
+            {"roleid": "Administrator", "privs": "", "special": 1},
+        ],
+        ("GET", "/access/users"): [{"userid": "root@pam"}, {"userid": "lab@pve"}],
+        ("GET", "/pools"): [{"poolid": "lab"}],
+        ("GET", "/access/users/lab@pve/token"): [{"tokenid": "tkctl"}],
+        ("GET", "/access/acl"): [
+            {
+                "path": "/pool/lab",
+                "roleid": "TkctlLabClass",
+                "type": "token",
+                "ugid": "lab@pve!tkctl",
+                "propagate": 1,
+            }
+        ],
+        ("GET", "/storage"): [
+            {"storage": "nas-nfs", "type": "nfs", "content": "images,snippets,import", "shared": 1}
+        ],
+        ("GET", "/nodes/n1/network"): [
+            {"iface": "vmbr0", "type": "bridge"},
+            {"iface": "eno1", "type": "eth"},
+        ],
+        ("GET", "/nodes"): [
+            {"node": "n2", "status": "online"},
+            {"node": "n1", "status": "online"},
+            {"node": "n3", "status": "offline"},
+        ],
+        ("GET", "/nodes/n1/certificates/info"): [
+            {"filename": "pve-root-ca.pem", "pem": "-----BEGIN CERTIFICATE-----\nAA\n"},
+            {"filename": "pve-ssl.pem", "pem": "x"},
+        ],
+        ("GET", "/cluster/nextid"): lambda req: (
+            http_error(400, b'{"errors":{"vmid":"VM 3900 already exists"}}')
+            if "vmid=3900" in req.full_url
+            else 3901
+        ),
+    }
+    c, _ = admin(routes)
+    assert c.roles() == {"TkctlLabA": {"VM.Audit", "VM.Clone"}, "Administrator": set()}
+    assert c.users() == {"root@pam", "lab@pve"} and c.pools() == {"lab"}
+    assert c.tokens("lab@pve") == {"tkctl"}
+    assert c.acl()[0]["ugid"] == "lab@pve!tkctl"
+    assert c.storages()[0]["storage"] == "nas-nfs"
+    assert c.bridges("n1") == ["vmbr0"] and c.nodes() == ["n1", "n2"]
+    assert c.ca_pem("n1").startswith("-----BEGIN CERTIFICATE-----")
+    assert c.vmid_free(3900) is False and c.vmid_free(3901) is True
+
+
+def test_admin_writes_shapes():
+    routes = TICKET | {
+        ("PUT", "/access/roles/TkctlLabA"): None,
+        ("POST", "/access/users"): None,
+        ("POST", "/pools"): None,
+        ("POST", "/access/users/lab@pve/token/tkctl"): {
+            "full-tokenid": "lab@pve!tkctl",
+            "value": "SECRET-1",
+        },
+        ("DELETE", "/access/users/lab@pve/token/old"): None,
+        ("PUT", "/access/acl"): None,
+    }
+    c, op = admin(routes)
+    c.role_set("TkctlLabA", ["VM.Audit"])
+    c.user_add("lab@pve", "tkctl lab service account")
+    c.pool_add("lab", "tkctl lab classes")
+    assert c.token_add("lab@pve", "tkctl") == "SECRET-1"
+    c.token_remove("lab@pve", "old")
+    c.acl_add("/pool/lab", "TkctlLabClass", token="lab@pve!tkctl")
+    c.acl_add("/pool/lab", "TkctlLabClass", user="lab@pve")
+    bodies = {k: b for (k, b, _) in op.calls}
+    assert bodies[("PUT", "/access/roles/TkctlLabA")] == "privs=VM.Audit"
+    assert bodies[("POST", "/access/users")] == "userid=lab%40pve&comment=tkctl+lab+service+account"
+    assert bodies[("POST", "/access/users/lab@pve/token/tkctl")] == "privsep=1"
+    acl_bodies = [b for (k, b, _) in op.calls if k == ("PUT", "/access/acl")]
+    assert acl_bodies == [
+        "path=%2Fpool%2Flab&roles=TkctlLabClass&propagate=1&tokens=lab%40pve%21tkctl",
+        "path=%2Fpool%2Flab&roles=TkctlLabClass&propagate=1&users=lab%40pve",
+    ]
+
+
+def test_admin_vm_is_template():
+    res = [{"vmid": 3900, "type": "qemu", "template": 1}, {"vmid": 3000, "type": "qemu"}]
+    c, _ = admin(TICKET | {("GET", "/cluster/resources"): res})
+    assert c.vm_is_template(3900) is True and c.vm_is_template(3000) is False
+    assert c.vm_is_template(4000) is False

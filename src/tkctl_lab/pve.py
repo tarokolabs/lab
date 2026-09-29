@@ -40,6 +40,55 @@ def tls_context(ca_file: str | None) -> ssl.SSLContext:
     return ctx
 
 
+def _build(base: str, method: str, path: str, params: dict | None) -> urllib.request.Request:
+    url = f"{base}{path}"
+    data = None
+    if params:
+        encoded = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+        if method in ("GET", "DELETE"):
+            url += "?" + encoded
+        else:
+            data = encoded.encode()
+    req = urllib.request.Request(url, data=data, method=method)
+    if data is not None:
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    return req
+
+
+def _send(opener, req: urllib.request.Request, method: str, path: str) -> Any:
+    try:
+        with opener(req, timeout=60) as resp:
+            return json.loads(resp.read() or b"{}").get("data")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace") if hasattr(e, "read") else ""
+        detail = _detail(body)
+        raise PveError(
+            e.code, f"{method} {path}: {e.reason}{': ' + detail if detail else ''}"
+        ) from e
+    except urllib.error.URLError as e:
+        hint = ""
+        if isinstance(e.reason, ssl.SSLCertVerificationError):
+            hint = "; set pve.ca_file to the PVE CA (/etc/pve/pve-root-ca.pem)"
+        raise PveError(0, f"{method} {path}: {e.reason}{hint}") from e
+
+
+def _default_opener(ca_file: str | None):
+    ctx = tls_context(ca_file)
+    return lambda req, timeout=None, context=None: urllib.request.urlopen(
+        req, timeout=timeout, context=ctx
+    )
+
+
+def _nextid_free(request, vmid: int) -> bool:
+    try:
+        request("GET", "/cluster/nextid", {"vmid": vmid})
+    except PveError as e:
+        if e.status == 400:
+            return False
+        raise
+    return True
+
+
 class Pve:
     def __init__(
         self,
@@ -55,45 +104,16 @@ class Pve:
         self.token_id = token_id
         self._auth = f"PVEAPIToken={token_id}={secret}"
         self.sleep = sleep
-        if opener is not None:
-            self.opener = opener
-        else:
-            # TLS is always verified; PVE's self-signed CA goes in pve.ca_file. No insecure mode.
-            ctx = tls_context(ca_file)
-            self.opener = lambda req, timeout=None, context=None: urllib.request.urlopen(
-                req, timeout=timeout, context=ctx
-            )
+        # TLS is always verified; PVE's self-signed CA goes in pve.ca_file. No insecure mode.
+        self.opener = opener if opener is not None else _default_opener(ca_file)
 
     def __repr__(self) -> str:
         return f"Pve({self.base}, {self.token_id})"
 
     def request(self, method: str, path: str, params: dict | None = None) -> Any:
-        url = f"{self.base}{path}"
-        data = None
-        if params:
-            encoded = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
-            if method in ("GET", "DELETE"):
-                url += "?" + encoded
-            else:
-                data = encoded.encode()
-        req = urllib.request.Request(url, data=data, method=method)
+        req = _build(self.base, method, path, params)
         req.add_header("Authorization", self._auth)
-        if data is not None:
-            req.add_header("Content-Type", "application/x-www-form-urlencoded")
-        try:
-            with self.opener(req, timeout=60) as resp:
-                return json.loads(resp.read() or b"{}").get("data")
-        except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace") if hasattr(e, "read") else ""
-            detail = _detail(body)
-            raise PveError(
-                e.code, f"{method} {path}: {e.reason}{': ' + detail if detail else ''}"
-            ) from e
-        except urllib.error.URLError as e:
-            hint = ""
-            if isinstance(e.reason, ssl.SSLCertVerificationError):
-                hint = "; set pve.ca_file to the PVE CA (/etc/pve/pve-root-ca.pem)"
-            raise PveError(0, f"{method} {path}: {e.reason}{hint}") from e
+        return _send(self.opener, req, method, path)
 
     # --- inventory
     def resources(self, kind: str) -> list[dict]:
@@ -101,13 +121,7 @@ class Pve:
 
     def vmid_free(self, vmid: int) -> bool:
         """True when /cluster/nextid (which sees the whole cluster) reports the id as free."""
-        try:
-            self.request("GET", "/cluster/nextid", {"vmid": vmid})
-        except PveError as e:
-            if e.status == 400:
-                return False
-            raise
-        return True
+        return _nextid_free(self.request, vmid)
 
     def next_vmid(self, lo: int, hi: int, exclude: frozenset[int] | set[int] = frozenset()) -> int:
         """Lowest free VMID in the range that is neither visible in use nor excluded.
@@ -249,3 +263,131 @@ class Pve:
                 return None
             self.sleep(5)
             elapsed += 5
+
+
+class PveAdmin:
+    """Ticket-authenticated client for the one-time setup; needs an administrator's password."""
+
+    def __init__(
+        self,
+        url: str,
+        username: str,
+        password: str,
+        *,
+        ca_file: str | None = None,
+        opener=None,
+    ):
+        self.base = url.rstrip("/") + "/api2/json"
+        self.username = username
+        self._password = password
+        self.opener = opener if opener is not None else _default_opener(ca_file)
+        self._ticket: str | None = None
+        self._csrf: str | None = None
+
+    def __repr__(self) -> str:
+        return f"PveAdmin({self.base}, {self.username})"
+
+    def login(self, totp: str | None = None) -> None:
+        creds = {"username": self.username, "password": self._password}
+        r = _send(
+            self.opener,
+            _build(self.base, "POST", "/access/ticket", creds),
+            "POST",
+            "/access/ticket",
+        )
+        if r.get("NeedTFA"):
+            if not totp:
+                raise PveError(
+                    401,
+                    f"{self.username} needs a TFA code to log in; "
+                    "pass it interactively or use --manual",
+                )
+            creds = {
+                "username": self.username,
+                "tfa-challenge": r["ticket"],
+                "password": f"totp:{totp}",
+            }
+            req = _build(self.base, "POST", "/access/ticket", creds)
+            r = _send(self.opener, req, "POST", "/access/ticket")
+        self._ticket, self._csrf = r["ticket"], r["CSRFPreventionToken"]
+
+    def request(self, method: str, path: str, params: dict | None = None) -> Any:
+        if self._ticket is None:
+            self.login()
+        req = _build(self.base, method, path, params)
+        req.add_header("Cookie", f"PVEAuthCookie={self._ticket}")
+        if method != "GET":
+            req.add_header("CSRFPreventionToken", self._csrf)
+        return _send(self.opener, req, method, path)
+
+    # --- access control
+    def roles(self) -> dict[str, set[str]]:
+        return {
+            r["roleid"]: {p for p in (r.get("privs") or "").split(",") if p}
+            for r in self.request("GET", "/access/roles") or []
+        }
+
+    def role_add(self, roleid: str, privs: list[str]) -> None:
+        self.request("POST", "/access/roles", {"roleid": roleid, "privs": ",".join(privs)})
+
+    def role_set(self, roleid: str, privs: list[str]) -> None:
+        self.request("PUT", f"/access/roles/{roleid}", {"privs": ",".join(privs)})
+
+    def users(self) -> set[str]:
+        return {u["userid"] for u in self.request("GET", "/access/users") or []}
+
+    def user_add(self, userid: str, comment: str) -> None:
+        self.request("POST", "/access/users", {"userid": userid, "comment": comment})
+
+    def pools(self) -> set[str]:
+        return {p["poolid"] for p in self.request("GET", "/pools") or []}
+
+    def pool_add(self, poolid: str, comment: str) -> None:
+        self.request("POST", "/pools", {"poolid": poolid, "comment": comment})
+
+    def tokens(self, userid: str) -> set[str]:
+        return {t["tokenid"] for t in self.request("GET", f"/access/users/{userid}/token") or []}
+
+    def token_add(self, userid: str, tokenid: str) -> str:
+        path = f"/access/users/{userid}/token/{tokenid}"
+        return self.request("POST", path, {"privsep": 1})["value"]
+
+    def token_remove(self, userid: str, tokenid: str) -> None:
+        self.request("DELETE", f"/access/users/{userid}/token/{tokenid}")
+
+    def acl(self) -> list[dict]:
+        return self.request("GET", "/access/acl") or []
+
+    def acl_add(
+        self, path: str, roleid: str, *, user: str | None = None, token: str | None = None
+    ) -> None:
+        params = {"path": path, "roles": roleid, "propagate": 1, "users": user, "tokens": token}
+        self.request("PUT", "/access/acl", params)
+
+    # --- inventory for the interactive setup
+    def nodes(self) -> list[str]:
+        online = [n for n in self.request("GET", "/nodes") or [] if n.get("status") == "online"]
+        return sorted(n["node"] for n in online)
+
+    def storages(self) -> list[dict]:
+        return self.request("GET", "/storage") or []
+
+    def bridges(self, node: str) -> list[str]:
+        params = {"type": "any_bridge"}
+        ifaces = self.request("GET", f"/nodes/{node}/network", params) or []
+        return [i["iface"] for i in ifaces if i.get("type") in ("bridge", "OVSBridge")]
+
+    def ca_pem(self, node: str) -> str:
+        for c in self.request("GET", f"/nodes/{node}/certificates/info") or []:
+            if c.get("filename") == "pve-root-ca.pem":
+                return c["pem"]
+        raise PveError(404, f"no pve-root-ca.pem on {node}")
+
+    def vmid_free(self, vmid: int) -> bool:
+        return _nextid_free(self.request, vmid)
+
+    def vm_is_template(self, vmid: int) -> bool:
+        for r in self.request("GET", "/cluster/resources", {"type": "vm"}) or []:
+            if r.get("vmid") == vmid:
+                return bool(r.get("template"))
+        return False

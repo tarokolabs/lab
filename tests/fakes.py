@@ -193,3 +193,153 @@ class FakeGuac:
     def delete_group(self, gid):
         for k in [k for k, v in self.groups.items() if v == gid]:
             del self.groups[k]
+
+
+class FakePveAdmin:
+    """In-memory PVE access control for setup tests."""
+
+    def __init__(
+        self,
+        *,
+        roles=None,
+        users=(),
+        pools=(),
+        tokens=None,
+        acl=(),
+        nodes=("n1",),
+        ca="-----BEGIN CERTIFICATE-----\nCA\n",
+    ):
+        self._roles = {k: set(v) for k, v in (roles or {}).items()}
+        self._users = set(users)
+        self._pools = set(pools)
+        self._tokens = {k: set(v) for k, v in (tokens or {}).items()}
+        self._acl = list(acl)
+        self._nodes = list(nodes)
+        self._ca = ca
+        self.calls: list[tuple] = []
+        self.secrets_issued = 0
+
+    def login(self, totp=None):
+        self.calls.append(("login", totp))
+
+    def roles(self):
+        return {k: set(v) for k, v in self._roles.items()}
+
+    def role_add(self, roleid, privs):
+        self.calls.append(("role_add", roleid, list(privs)))
+        self._roles[roleid] = set(privs)
+
+    def role_set(self, roleid, privs):
+        self.calls.append(("role_set", roleid, list(privs)))
+        self._roles[roleid] = set(privs)
+
+    def users(self):
+        return set(self._users)
+
+    def user_add(self, userid, comment):
+        self.calls.append(("user_add", userid))
+        self._users.add(userid)
+
+    def pools(self):
+        return set(self._pools)
+
+    def pool_add(self, poolid, comment):
+        self.calls.append(("pool_add", poolid))
+        self._pools.add(poolid)
+
+    def tokens(self, userid):
+        return set(self._tokens.get(userid, set()))
+
+    def token_add(self, userid, tokenid):
+        self.calls.append(("token_add", userid, tokenid))
+        self._tokens.setdefault(userid, set()).add(tokenid)
+        self.secrets_issued += 1
+        return f"secret-{tokenid}-{self.secrets_issued}"
+
+    def token_remove(self, userid, tokenid):
+        self.calls.append(("token_remove", userid, tokenid))
+        self._tokens[userid].discard(tokenid)
+
+    def acl(self):
+        return [dict(a) for a in self._acl]
+
+    def acl_add(self, path, roleid, *, user=None, token=None):
+        self.calls.append(("acl_add", path, roleid, user or token))
+        kind, ugid = ("user", user) if user else ("token", token)
+        self._acl.append(
+            {"path": path, "roleid": roleid, "type": kind, "ugid": ugid, "propagate": 1}
+        )
+
+    def nodes(self):
+        return list(self._nodes)
+
+    def storages(self):
+        return [
+            {"storage": "nas-nfs", "type": "nfs", "content": "images,snippets,import", "shared": 1}
+        ]
+
+    def bridges(self, node):
+        return ["vmbr0"]
+
+    def ca_pem(self, node):
+        return self._ca
+
+    def vmid_free(self, vmid):
+        return True
+
+    def vm_is_template(self, vmid):
+        return False
+
+
+class FakeGuacAdmin:
+    """Admin-side Guacamole for setup tests; also fakes the service account's own login."""
+
+    def __init__(self, *, users=None, perms=None, totp="off"):
+        # totp: "off" (no extension), "fresh" (challenge offers a secret), "enrolled" (no secret)
+        self.users = dict(users or {})  # username -> password
+        self.perms = {k: set(v) for k, v in (perms or {}).items()}
+        self.totp = totp
+        self.enrolled_secret = None
+        self.calls: list[tuple] = []
+
+    def get_user(self, username):
+        return {"username": username, "attributes": {}} if username in self.users else None
+
+    def create_user(self, username, password):
+        self.calls.append(("create_user", username))
+        self.users[username] = password
+
+    def set_password(self, username, password):
+        self.calls.append(("set_password", username))
+        self.users[username] = password
+
+    def system_permissions(self, username):
+        return set(self.perms.get(username, set()))
+
+    def grant_system(self, username, perms):
+        self.calls.append(("grant_system", username, list(perms)))
+        self.perms.setdefault(username, set()).update(perms)
+
+    def clear_totp(self, username):
+        self.calls.append(("clear_totp", username))
+        self.totp = "fresh"
+        self.enrolled_secret = None
+
+    def logout(self):
+        self.calls.append(("logout",))
+
+    # --- the service account logging in through the same fake
+    def service_login(self, username, password, totp_secret):
+        if self.users.get(username) != password:
+            raise GuacError(
+                403, "Invalid login", {"expected": [{"name": "username"}, {"name": "password"}]}
+            )
+        if self.totp == "off":
+            return {"secret": None}
+        if self.totp == "fresh":
+            self.totp = "enrolled"
+            self.enrolled_secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+            return {"secret": self.enrolled_secret}
+        if totp_secret == self.enrolled_secret:
+            return {"secret": None}
+        raise GuacError(403, "Verification code required", {"expected": [{"name": "guac-totp"}]})

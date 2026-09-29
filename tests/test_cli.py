@@ -2,9 +2,12 @@ import re
 
 import pytest
 
-from tkctl_lab import cli, config
+from tkctl_lab import cli, config, setup
+from tkctl_lab.pve import PveError
 
-from .fakes import FakeGuac, FakePve
+from .fakes import FakeGuac, FakeGuacAdmin, FakePve, FakePveAdmin
+from .test_setup_config import SUMS, answers
+from .test_setup_guac import ServiceClient
 
 GOOD = config.INIT_TEMPLATE.replace(
     'image_sha512 = "replace-with-the-value-from-SHA512SUMS"', 'image_sha512 = "abc"'
@@ -140,41 +143,6 @@ def test_get_classes_groups_by_class(env, capsys):
     assert rc == 0 and out.startswith("k8s-101") and "lab-k8s-101-02" in out
 
 
-def test_init_writes_config_once_and_prints_pveum(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    assert cli.main(["init"]) == 0
-    assert config.config_path().exists()
-    first = capsys.readouterr().out
-    assert "wrote" in first and "pveum role add TkctlLab" in first
-    config.config_path().write_text(GOOD)
-    assert cli.main(["init"]) == 0  # existing config is kept; only the pveum commands are printed
-    again = capsys.readouterr().out
-    assert "wrote" not in again
-    assert "grant /pool/lab TkctlLabClass 'lab@pve!tkctl'" in again
-    assert 'pveum acl modify "$1" --tokens "$3" --roles "$2"' in again
-    assert 'pveum acl modify "$1" --users lab@pve --roles "$2"' in again
-    assert "-privs" not in again.replace("--privs", "")  # long options only, spelled as pveum wants
-    assert "pveum user token add lab@pve tkctl --privsep 1" in again
-    assert "pveum user token add lab@pve tkctl-build --privsep 1" in again
-    # least privilege: no Sys.Audit anywhere, no VM.Monitor, no Pool.Audit; the runtime token
-    # may only clone the template, and only the build token may write images or fetch URLs
-    assert "Sys.Audit" not in again and "VM.Monitor" not in again
-    # /cluster/resources only carries the `pool` field for callers with Pool.Audit on that pool
-    assert re.search(r"role add TkctlLabClass .*Pool\.Audit", again)
-    assert "Datastore.AllocateTemplate" in again and "Sys.AccessNetwork" in again
-    # snippets are only visible with Datastore.Allocate (check_volume_access); build token only
-    assert re.search(r"role add TkctlLabImage .*Datastore\.Allocate ", again + " ")
-    assert not re.search(r"role add TkctlLabDisk .*Datastore\.Allocate ", again + " ")
-    assert "'lab@pve!tkctl'" in again and "'lab@pve!tkctl-build'" in again  # no history expansion
-    assert re.search(r"role add TkctlLabTemplateUse .*VM\.Clone", again)
-    assert (
-        "/vms/3900" in again
-        and "/storage/nas-nfs" in again
-        and "/sdn/zones/localnetwork/vmbr0" in again
-    )
-    assert config.config_path().read_text() == GOOD
-
-
 def test_pve_error_is_one_line_and_exit_1(env, capsys):
     from tkctl_lab.pve import PveError
 
@@ -231,3 +199,184 @@ def test_missing_config_points_at_init(tmp_path, monkeypatch, capsys):
 def test_progress_lines_flush_when_stdout_is_a_file():
     # `nohup tkctl-lab create … > log` must show progress as it happens, not at exit
     assert cli.log.keywords == {"flush": True}
+
+
+def init(argv, *, pve_admin=None, guac_admin=None, text=(), secrets=(), tty=True):
+    pve_admin = pve_admin or FakePveAdmin(nodes=["n1"])
+    guac_admin = guac_admin or FakeGuacAdmin()
+    t, s = iter(text), iter(secrets)
+    rc = cli.main(
+        ["init", *argv],
+        make_admin=lambda url, user, pw, ca_file=None: pve_admin,
+        make_guac_admin=lambda url, user, pw, totp: guac_admin,
+        make_service_client=lambda url, u, p, secret: ServiceClient(guac_admin, u, p, secret),
+        make_clients=lambda cfg, sec: (FakePve(), FakeGuac()),
+        ask_text=(lambda q, d: next(t) or d) if tty else None,
+        ask_secret=(lambda q: next(s)) if tty else None,
+        fetch=lambda url: SUMS,
+        tty=tty,
+    )
+    return rc, pve_admin, guac_admin
+
+
+FLAGS = ["--pve-url", "https://p", "--storage", "nas-nfs", "--guacamole-url", "https://g"]
+
+
+def test_init_with_flags_does_all_three_and_writes_env(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
+    rc, *_ = init([*FLAGS, "--node", "n1"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert config.config_path().exists() and config.load().pve.storage == "nas-nfs"
+    assert "config: created" in out and "TkctlLabClass: created" in out
+    assert "user tkctl-lab: created" in out
+    from tkctl_lab import envfile
+
+    e = envfile.read(envfile.path())
+    assert set(e) >= {"TK_LAB_PVE_TOKEN", "TK_LAB_PVE_BUILD_TOKEN", "TK_LAB_GUAC_PASSWORD"}
+    assert oct(envfile.path().stat().st_mode & 0o777) == "0o600"
+    assert "next: tkctl lab create template" in out
+    assert "p" not in e.values() and "g" not in e.values()  # admin passwords never land here
+    assert (config.config_path().parent / "pve-root-ca.pem").exists()
+
+
+def test_init_flags_without_admin_password_is_a_usage_error_when_not_a_tty(capsys):
+    rc, *_ = init(FLAGS, tty=False)
+    assert rc == 2 and "TK_LAB_PVE_ADMIN_PASSWORD" in capsys.readouterr().err
+
+
+def test_init_rerun_with_a_config_asks_for_the_admin_passwords_on_a_tty(capsys):
+    config.config_path().parent.mkdir(parents=True)
+    config.config_path().write_text(setup.render_config(answers(node="n1")))
+    # no admin passwords in the environment, but a terminal: ask for them
+    rc, pve_admin, guac_admin = init([], text=["", ""], secrets=["pve-pw", "guac-pw"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "config: kept" in out
+    assert ("login", None) in pve_admin.calls and ("create_user", "tkctl-lab") in guac_admin.calls
+
+
+def test_init_interactive_when_nothing_is_given(capsys):
+    text = ["https://p", "", "", "", "", "", "", "", "https://g", ""]
+    rc, *_ = init([], text=text, secrets=["pve-pw", "guac-pw"])
+    assert rc == 0 and config.load().guacamole.url == "https://g"
+    assert "next: tkctl lab create template" in capsys.readouterr().out
+
+
+def test_init_pve_only_and_rerun_is_kept(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
+    admin = FakePveAdmin(nodes=["n1"])
+    init(FLAGS, pve_admin=admin)
+    capsys.readouterr()
+    rc, _, guac_admin = init(["pve"], pve_admin=admin)
+    out = capsys.readouterr().out
+    assert rc == 0 and "kept" in out and "created" not in out
+    assert guac_admin.calls == []  # guacamole untouched
+
+
+def test_init_guacamole_only(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
+    config.config_path().parent.mkdir(parents=True)
+    config.config_path().write_text(setup.render_config(answers()))
+    rc, pve_admin, guac_admin = init(["guacamole"])
+    assert rc == 0 and pve_admin.calls == [] and ("create_user", "tkctl-lab") in guac_admin.calls
+
+
+def test_init_manual_prints_script_and_checklist_without_connecting(capsys):
+    config.config_path().parent.mkdir(parents=True)
+    config.config_path().write_text(setup.render_config(answers(node="pve-node7")))
+    rc, pve_admin, guac_admin = init(["--manual"])
+    out = capsys.readouterr().out
+    assert rc == 0 and pve_admin.calls == [] and guac_admin.calls == []
+    assert "pveum role add TkctlLabClass" in out
+    assert "grant /nodes/pve-node7 TkctlLabFetch" in out
+    assert "Create new connection groups" in out
+
+
+def test_init_from_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
+    f = tmp_path / "given.toml"
+    f.write_text(setup.render_config(answers()))
+    rc, *_ = init(["-f", str(f)])
+    assert rc == 0 and "config: copied" in capsys.readouterr().out
+
+
+def test_init_pve_failure_stops_before_guacamole(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
+
+    class Forbidden(FakePveAdmin):
+        def role_add(self, roleid, privs):
+            raise PveError(403, "POST /access/roles: Permission check failed")
+
+    rc, _, guac_admin = init(FLAGS, pve_admin=Forbidden(nodes=["n1"]))
+    err = capsys.readouterr().err
+    assert rc == 1 and "Permissions.Modify" in err and "--manual" in err
+    assert guac_admin.calls == []
+
+
+def test_init_ctrl_c_leaves_nothing_behind(capsys):
+    def interrupted(q, d):
+        raise KeyboardInterrupt
+
+    rc = cli.main(["init"], ask_text=interrupted, ask_secret=lambda q: "x")
+    assert rc == 1 and not config.config_path().exists()
+    assert "aborted" in capsys.readouterr().err
+
+
+def test_init_uses_the_well_known_ca_before_a_config_exists(capsys):
+    ca = config.config_path().parent / "pve-root-ca.pem"
+    ca.parent.mkdir(parents=True)
+    ca.write_text("-----BEGIN CERTIFICATE-----\nCA\n")
+    seen = {}
+
+    def make_admin(url, user, pw, ca_file=None):
+        seen["ca_file"] = ca_file
+        return FakePveAdmin(nodes=["n1"])
+
+    text = iter(["https://p", "", "", "", "", "", "", "", "https://g", ""])
+    guac_admin = FakeGuacAdmin()
+    rc = cli.main(
+        ["init"],
+        make_admin=make_admin,
+        make_guac_admin=lambda url, user, pw, totp: guac_admin,
+        make_service_client=lambda url, u, p, s: ServiceClient(guac_admin, u, p, s),
+        ask_text=lambda q, d: next(text) or d,
+        ask_secret=lambda q: "pw",
+        fetch=lambda url: SUMS,
+    )
+    assert rc == 0 and seen["ca_file"] == str(ca)
+
+
+def test_init_guacamole_totp_admin_message_does_not_point_at_the_service_secret(
+    monkeypatch, capsys
+):
+    from tkctl_lab.guac import GuacError
+
+    monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
+    config.config_path().parent.mkdir(parents=True)
+    config.config_path().write_text(setup.render_config(answers()))
+
+    class NeedsCode(FakeGuacAdmin):
+        def login(self, totp=None):
+            raise GuacError(
+                403, "Verification code required", {"expected": [{"name": "guac-totp"}]}
+            )
+
+    rc, *_ = init(["guacamole"], guac_admin=NeedsCode())
+    err = capsys.readouterr().err
+    assert rc == 1 and "TOTP" in err and "--manual" in err
+    assert "TK_LAB_GUAC_TOTP_SECRET" not in err
+
+
+def test_init_403_hint_names_sys_modify(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+
+    class Forbidden(FakePveAdmin):
+        def role_add(self, roleid, privs):
+            raise PveError(403, "POST /access/roles: Permission check failed")
+
+    rc, *_ = init([*FLAGS], pve_admin=Forbidden(nodes=["n1"]))
+    assert rc == 1 and "Sys.Modify" in capsys.readouterr().err

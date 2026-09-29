@@ -130,3 +130,23 @@ def test_guac_totp_secret_is_optional(monkeypatch):
     assert config.secrets().guac_totp is None
     monkeypatch.setenv("TK_LAB_GUAC_TOTP_SECRET", "GEZD")
     assert config.secrets().guac_totp == "GEZD"
+
+
+def test_secrets_fall_back_to_env_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from tkctl_lab import envfile
+
+    envfile.write(
+        envfile.path(),
+        {
+            "TK_LAB_PVE_TOKEN": "file-t",
+            "TK_LAB_GUAC_PASSWORD": "file-p",
+            "TK_LAB_PVE_BUILD_TOKEN": "file-b",
+        },
+    )
+    s = config.secrets()
+    assert (s.pve_token, s.guac_password, s.guac_totp) == ("file-t", "file-p", None)
+    assert config.build_secret() == "file-b"
+    monkeypatch.setenv("TK_LAB_PVE_TOKEN", "env-t")  # the environment wins
+    assert config.secrets().pve_token == "env-t"
+    assert config.merged_env()["TK_LAB_PVE_TOKEN"] == "env-t"

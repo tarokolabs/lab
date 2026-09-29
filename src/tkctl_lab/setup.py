@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import secrets as _secrets
+import shutil
 import string
+import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
+from . import config as configmod
 from . import guac as guacmod
 from .config import Config
+
+
+class SetupError(Exception):
+    """A setup step cannot proceed; the message says what to give or fix."""
+
 
 USER = "lab@pve"
 TOKENS = ("tkctl", "tkctl-build")
@@ -302,3 +311,113 @@ Guacamole URL: {url}
 
 def manual_guacamole(cfg: Config) -> str:
     return MANUAL_GUAC.format(user=cfg.guacamole.username, url=cfg.guacamole.url)
+
+
+# --- the config file
+@dataclass(frozen=True)
+class Answers:
+    pve_url: str
+    pve_admin: str
+    node: str
+    pool: str
+    storage: str
+    bridge: str
+    template: int
+    vmid_range: tuple[int, int]
+    guacamole_url: str
+    guacamole_admin: str
+    image_sha512: str
+
+
+DEFAULT_IMAGE = (
+    "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
+)
+DEFAULTS: dict = dict(
+    pve_admin="root@pam",
+    node="auto",
+    pool="lab",
+    bridge="vmbr0",
+    template=3900,
+    vmid_range=(3100, 3199),
+    guacamole_admin="guacadmin",
+)
+REQUIRED_FLAGS = ("pve_url", "storage", "guacamole_url")
+
+
+def _http_get(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=60) as r:
+        return r.read().decode()
+
+
+def fetch_sha512(image_url: str, fetch=_http_get) -> str:
+    base, name = image_url.rsplit("/", 1)
+    for line in fetch(f"{base}/SHA512SUMS").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].lstrip("*") == name:
+            return parts[0]
+    raise SetupError(f"{name} is not listed in {base}/SHA512SUMS")
+
+
+def render_config(a: Answers) -> str:
+    """The commented INIT_TEMPLATE with the answers filled in; admin identities never land here."""
+    text = configmod.INIT_TEMPLATE
+    ca = configmod.config_path().parent / "pve-root-ca.pem"
+    subs = {
+        'url = "https://pve-node1:8006"': f'url = "{a.pve_url}"',
+        'node = "auto"': f'node = "{a.node}"',
+        'pool = "lab"': f'pool = "{a.pool}"',
+        'storage = "nas-nfs"': f'storage = "{a.storage}"',
+        "template = 3900": f"template = {a.template}",
+        "vmid_range = [3100, 3199]": f"vmid_range = [{a.vmid_range[0]}, {a.vmid_range[1]}]",
+        'bridge = "vmbr0"': f'bridge = "{a.bridge}"',
+        '# ca_file = "/path/to/pve-root-ca.pem"': f'ca_file = "{ca}"',
+        'url = "https://guac.example"': f'url = "{a.guacamole_url}"',
+        'image_sha512 = "replace-with-the-value-from-SHA512SUMS"': (
+            f'image_sha512 = "{a.image_sha512}"'
+        ),
+    }
+    for old, new in subs.items():
+        assert old in text, old
+        text = text.replace(old, new, 1)
+    return text
+
+
+def _parse_range(value) -> tuple[int, int]:
+    if isinstance(value, tuple):
+        return value
+    lo, hi = value.split("-")
+    return int(lo), int(hi)
+
+
+def ensure_config(
+    *, path: Path, flags: dict, file: Path | None, force: bool, interactive, fetch
+) -> tuple[Config, str]:
+    """Make sure the config exists and loads; returns it and created | copied | kept."""
+    if file is not None:
+        if path.exists() and path.read_text() == file.read_text():
+            return configmod.load(path), "kept"
+        if path.exists() and not force:
+            raise SetupError(f"{path} exists and differs from {file}; pass --force to replace it")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(file, path)
+        return configmod.load(path), "copied"
+    if path.exists():
+        return configmod.load(path), "kept"
+    given = {k: v for k, v in flags.items() if v is not None}
+    if given:
+        missing = [f"--{k.replace('_', '-')}" for k in REQUIRED_FLAGS if k not in given]
+        if missing:
+            raise SetupError("missing " + ", ".join(missing))
+        values = DEFAULTS | given
+        values["vmid_range"] = _parse_range(values["vmid_range"])
+        values["template"] = int(values["template"])
+        a = Answers(**values, image_sha512=fetch_sha512(DEFAULT_IMAGE, fetch=fetch))
+    elif interactive is not None:
+        a = interactive()
+    else:
+        raise SetupError(
+            "no config yet: run `tkctl lab init` interactively, pass flags, or -f FILE"
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_config(a))
+    return configmod.load(path), "created"

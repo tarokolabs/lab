@@ -51,6 +51,13 @@ def RDP_PARAMS(host: str, user: str, password: str) -> dict:
     }
 
 
+def challenge(err: GuacError) -> dict | None:
+    """The guac-totp field of a 403 login challenge, or None when the error is something else."""
+    if err.status != 403:
+        return None
+    return next((f for f in err.body.get("expected", []) if f.get("name") == TOTP_FIELD), None)
+
+
 def _body(err: urllib.error.HTTPError) -> dict:
     try:
         data = json.loads(err.read())
@@ -105,21 +112,24 @@ class Guac:
         except urllib.error.URLError as e:
             raise GuacError(0, f"{method} {path}: {e.reason}") from e
 
-    def login(self) -> None:
+    def login(self, totp: str | None = None) -> None:
         creds = {"username": self.username, "password": self.password}
         try:
             r = self._call("POST", "/tokens", creds, form=True)
         except GuacError as e:
-            expected = {x.get("name") for x in e.body.get("expected", [])}
-            if TOTP_FIELD not in expected:
+            if challenge(e) is None:
                 raise
-            if not self.totp_secret:
+            if totp:
+                r = self._call("POST", "/tokens", creds | {TOTP_FIELD: totp}, form=True)
+            elif self.totp_secret:
+                r = self._login_with_code(creds)
+            else:
                 raise GuacError(
                     e.status,
                     f"login needs a TOTP code; enrol {self.username} once and set "
                     f"{TOTP_SECRET_ENV} to its secret",
+                    e.body,
                 ) from e
-            r = self._login_with_code(creds)
         self.token, self.data_source = r["authToken"], r["dataSource"]
 
     def _login_with_code(self, creds: dict) -> dict:
@@ -171,6 +181,37 @@ class Guac:
         self._data("DELETE", f"/connectionGroups/{gid}")
 
     # --- users and connections
+    def get_user(self, username: str) -> dict | None:
+        try:
+            return self._data("GET", f"/users/{urllib.parse.quote(username)}")
+        except GuacError as e:
+            if e.status == 404:
+                return None
+            raise
+
+    def set_password(self, username: str, password: str) -> None:
+        body = {"username": username, "password": password, "attributes": {}}
+        self._data("PUT", f"/users/{urllib.parse.quote(username)}", body)
+
+    def system_permissions(self, username: str) -> set[str]:
+        perms = self._data("GET", f"/users/{urllib.parse.quote(username)}/permissions")
+        return set(perms.get("systemPermissions", []))
+
+    def grant_system(self, username: str, perms: list[str]) -> None:
+        ops = [{"op": "add", "path": "/systemPermissions", "value": p} for p in perms]
+        self._data("PATCH", f"/users/{urllib.parse.quote(username)}/permissions", ops)
+
+    def clear_totp(self, username: str) -> None:
+        """Reset the account's TOTP enrolment (what the admin UI's "Clear TOTP secret" does)."""
+        attrs = {"guac-totp-key-secret": "", "guac-totp-key-confirmed": "false"}
+        body = {"username": username, "attributes": attrs}
+        self._data("PUT", f"/users/{urllib.parse.quote(username)}", body)
+
+    def logout(self) -> None:
+        if self.token:
+            self._call("DELETE", f"/tokens/{self.token}")
+            self.token = None
+
     def create_user(self, username: str, password: str) -> None:
         self._data("POST", "/users", {"username": username, "password": password, "attributes": {}})
 

@@ -17,15 +17,21 @@ def _choose(ask_text, question: str, options: list[str], default: str) -> str:
         print(f"  choose one of: {', '.join(options)}")
 
 
+def _is_auth_error(e: PveError) -> bool:
+    return e.status == 401
+
+
 def _pve_login(ask_text, ask_secret, admin_factory, pve_url: str):
     """Ask for the administrator once, then for the password until PVE accepts it (plus a TFA
-    code when PVE asks for one)."""
+    code when PVE asks for one). Anything but a rejected login (TLS, network, 5xx) propagates."""
     pve_admin = ask_text("PVE administrator", DEFAULTS["pve_admin"])
     while True:
         password = ask_secret(f"Password for {pve_admin}")
         try:
             return admin_factory(pve_url, pve_admin, password), pve_admin
         except PveError as e:
+            if not _is_auth_error(e):
+                raise
             if "TFA" not in str(e):
                 print(f"  {e}")
                 continue
@@ -35,6 +41,8 @@ def _pve_login(ask_text, ask_secret, admin_factory, pve_url: str):
                 admin.login(totp=code)
                 return admin, pve_admin
             except PveError as e2:
+                if not _is_auth_error(e2):
+                    raise
                 print(f"  {e2}")
 
 
@@ -46,6 +54,8 @@ def _guac_login(ask_text, ask_secret, guac_login, guac_url: str) -> tuple[str, s
             guac_login(guac_url, guac_admin, guac_pw, None)
             return guac_admin, guac_pw
         except GuacError as e:
+            if e.status != 403:
+                raise
             if challenge(e) is None:
                 print(f"  {e}")
                 continue
@@ -54,6 +64,8 @@ def _guac_login(ask_text, ask_secret, guac_login, guac_url: str) -> tuple[str, s
                 guac_login(guac_url, guac_admin, guac_pw, code)
                 return guac_admin, guac_pw
             except GuacError as e2:
+                if e2.status not in (400, 403):
+                    raise
                 print(f"  {e2}")
 
 
@@ -83,8 +95,23 @@ def ask(*, admin_factory, ask_text, ask_secret, guac_login) -> tuple[Answers, ob
         template = int(ask_text("Template VMID", str(DEFAULTS["template"])))
         if admin.vmid_free(template):
             break
-        print(f"  VMID {template} is in use")
-    lo, hi = (int(x) for x in ask_text("Student VMID range (low-high)", "3100-3199").split("-"))
+        if admin.vm_is_template(template):
+            print(f"  VMID {template} is the existing template; kept")
+            break
+        print(f"  VMID {template} is in use by a VM")
+    while True:
+        raw = ask_text("Student VMID range (low-high)", "3100-3199")
+        try:
+            lo, hi = (int(x) for x in raw.split("-"))
+        except ValueError:
+            print("  expected two numbers like 3100-3199")
+            continue
+        if lo > hi:
+            print("  the low end must not exceed the high end")
+        elif lo <= template <= hi:
+            print(f"  the range must not include the template VMID {template}")
+        else:
+            break
     guac_url = ask_text("Guacamole URL", "")
     guac_admin, guac_pw = _guac_login(ask_text, ask_secret, guac_login, guac_url)
     answers = Answers(

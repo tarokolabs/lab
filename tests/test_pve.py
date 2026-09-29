@@ -355,3 +355,10 @@ def test_admin_writes_shapes():
         "path=%2Fpool%2Flab&roles=TkctlLabClass&propagate=1&tokens=lab%40pve%21tkctl",
         "path=%2Fpool%2Flab&roles=TkctlLabClass&propagate=1&users=lab%40pve",
     ]
+
+
+def test_admin_vm_is_template():
+    res = [{"vmid": 3900, "type": "qemu", "template": 1}, {"vmid": 3000, "type": "qemu"}]
+    c, _ = admin(TICKET | {("GET", "/cluster/resources"): res})
+    assert c.vm_is_template(3900) is True and c.vm_is_template(3000) is False
+    assert c.vm_is_template(4000) is False

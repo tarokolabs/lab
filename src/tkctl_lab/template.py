@@ -164,13 +164,8 @@ def build(cfg: Config, pve, *, k8s: str | None, node: str | None, log=print) -> 
             log(f"{e}")
             log(
                 f"PVE removed the ACLs on /vms/{vmid} when the old template was deleted; "
-                "as a PVE administrator run the grant lines from `tkctl lab init` again:"
+                "run `tkctl lab init pve` to put them back, then build again"
             )
-            for role, token in (
-                ("TkctlLabTemplateUse", "lab@pve!tkctl"),
-                ("TkctlLabTemplateBuild", "lab@pve!tkctl-build"),
-            ):
-                log(f"  grant /vms/{vmid} {role} '{token}'")
             return 1
         raise
     pve.wait_task(upid, timeout=IMPORT_TIMEOUT)

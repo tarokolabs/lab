@@ -385,3 +385,9 @@ class PveAdmin:
 
     def vmid_free(self, vmid: int) -> bool:
         return _nextid_free(self.request, vmid)
+
+    def vm_is_template(self, vmid: int) -> bool:
+        for r in self.request("GET", "/cluster/resources", {"type": "vm"}) or []:
+            if r.get("vmid") == vmid:
+                return bool(r.get("template"))
+        return False

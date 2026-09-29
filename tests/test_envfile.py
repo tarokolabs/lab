@@ -36,3 +36,18 @@ def test_write_keeps_foreign_lines(tmp_path):
 def test_write_rejects_keys_it_does_not_own(tmp_path):
     with pytest.raises(ValueError, match="EDITOR"):
         envfile.write(tmp_path / "lab.env", {"EDITOR": "vim"})
+
+
+def test_read_tolerates_shell_style_lines(tmp_path):
+    p = tmp_path / "lab.env"
+    lines = [
+        "export TK_LAB_PVE_TOKEN=abc",
+        'TK_LAB_GUAC_PASSWORD="quo ted"',
+        "TK_LAB_PVE_BUILD_TOKEN='x=y'",
+    ]
+    p.write_text("\n".join(lines) + "\n")
+    assert envfile.read(p) == {
+        "TK_LAB_PVE_TOKEN": "abc",
+        "TK_LAB_GUAC_PASSWORD": "quo ted",
+        "TK_LAB_PVE_BUILD_TOKEN": "x=y",
+    }

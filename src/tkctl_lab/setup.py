@@ -269,7 +269,18 @@ def reconcile_guacamole(
     secret = env.get("TK_LAB_GUAC_TOTP_SECRET") or None
     # Probe without the secret first: no challenge means TOTP is off, a challenge with a secret
     # means the account is not enrolled yet, a bare challenge means it is.
-    state, offered = _totp_state(make_client(user, password, None))
+    try:
+        state, offered = _totp_state(make_client(user, password, None))
+    except guacmod.GuacError as e:
+        if e.status != 403 or "TK_LAB_GUAC_PASSWORD" not in env:
+            raise
+        # The password we hold no longer opens the account: it is ours, so rotate it.
+        password = new_password()
+        admin.set_password(user, password)
+        new_env["TK_LAB_GUAC_PASSWORD"] = password
+        slot = next(i for i, (item, _) in enumerate(results) if item == f"user {user}")
+        results[slot] = (f"user {user}", "updated")
+        state, offered = _totp_state(make_client(user, password, None))
     if state == "none":
         if secret:
             new_env["TK_LAB_GUAC_TOTP_SECRET"] = ""

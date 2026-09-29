@@ -217,3 +217,86 @@ def test_prompt_refuses_when_no_storage_qualifies():
             ask_secret=lambda q: "pw",
             guac_login=lambda *a: None,
         )
+
+
+def test_prompt_aborts_on_non_auth_pve_errors():
+    # a TLS or connection failure is not a wrong password: no re-asking, the error propagates
+    asked = []
+
+    def admin_factory(url, user, password):
+        asked.append(password)
+        raise PveError(0, "POST /access/ticket: certificate verify failed")
+
+    text = iter(["https://p", ""])
+    with pytest.raises(PveError, match="certificate"):
+        prompt.ask(
+            admin_factory=admin_factory,
+            ask_text=lambda q, d: next(text) or d,
+            ask_secret=lambda q: "pw",
+            guac_login=lambda *a: None,
+        )
+    assert asked == ["pw"]
+
+
+def test_prompt_aborts_on_non_auth_guacamole_errors():
+    from tkctl_lab.guac import GuacError
+
+    def guac_login(url, user, pw, totp):
+        raise GuacError(0, "POST /tokens: Connection refused")
+
+    text = iter(TEXT)
+    with pytest.raises(GuacError, match="refused"):
+        prompt.ask(
+            admin_factory=lambda u, us, p: FakePveAdmin(nodes=["n1"]),
+            ask_text=lambda q, d: next(text) or d,
+            ask_secret=lambda q: "pw",
+            guac_login=guac_login,
+        )
+
+
+def test_prompt_accepts_the_existing_template_vmid_but_not_a_plain_vm():
+    class Cluster(FakePveAdmin):
+        def vmid_free(self, vmid):
+            return vmid not in (3900, 3000)
+
+        def vm_is_template(self, vmid):
+            return vmid == 3900
+
+    script = iter(["https://p", "", "", "", "", "", "3000", "3900", "", "https://g", ""])
+    a, _, _ = prompt.ask(
+        admin_factory=lambda u, us, p: Cluster(nodes=["n1"]),
+        ask_text=lambda q, d: next(script) or d,
+        ask_secret=lambda q: "pw",
+        guac_login=lambda *a: None,
+    )
+    assert a.template == 3900  # 3000 (a running VM) was refused, 3900 (the template) accepted
+
+
+def test_prompt_validates_the_student_range():
+    script = iter(
+        [
+            "https://p",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "3199-3100",
+            "3899-3901",
+            "abc",
+            "3100-3199",
+            "https://g",
+            "",
+        ]
+    )
+    a, _, _ = prompt.ask(
+        admin_factory=lambda u, us, p: FakePveAdmin(nodes=["n1"]),
+        ask_text=lambda q, d: next(script) or d,
+        ask_secret=lambda q: "pw",
+        guac_login=lambda *a: None,
+    )
+    assert a.vmid_range == (
+        3100,
+        3199,
+    )  # reversed, overlapping the template, and garbage were re-asked

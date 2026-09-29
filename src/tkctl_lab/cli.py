@@ -140,7 +140,7 @@ FLAG_KEYS = (
     "guacamole_url",
     "guacamole_admin",
 )
-PVE_ADMIN_PRIVS = "Permissions.Modify, Realm.AllocateUser, Pool.Allocate"
+PVE_ADMIN_PRIVS = "Permissions.Modify, Realm.AllocateUser, Pool.Allocate, Sys.Modify"
 
 
 def _report(section: str, results: list[tuple[str, str]]) -> None:
@@ -154,7 +154,7 @@ class _Init:
     def __init__(self, args, deps: dict):
         self.args = args
         self.make_admin = deps.get("make_admin") or (
-            lambda url, user, pw: PveAdmin(url, user, pw, ca_file=self.ca_file)
+            lambda url, user, pw, ca_file=None: PveAdmin(url, user, pw, ca_file=ca_file)
         )
         self.make_guac_admin = deps.get("make_guac_admin") or (
             lambda url, user, pw, code: Guac(url, user, pw)
@@ -167,13 +167,15 @@ class _Init:
         )
         self.ask_secret = deps.get("ask_secret") or (lambda q: getpass.getpass(f"{q}: "))
         self.fetch = deps.get("fetch") or setup._http_get
-        self.ca_file: str | None = None
+        # The CA fetched by an earlier `init pve` (or copied there by hand) works before any config.
+        well_known = config.config_path().parent / "pve-root-ca.pem"
+        self.ca_file: str | None = str(well_known) if well_known.exists() else None
         self.pve_admin = None  # a logged-in PveAdmin gathered interactively
         self.guac_admin = None  # a logged-in Guac admin client gathered interactively
 
     # --- credentials
     def admin_factory(self, url: str, user: str, password: str):
-        admin = self.make_admin(url, user, password)
+        admin = self.make_admin(url, user, password, ca_file=self.ca_file)
         admin.login()
         self.pve_admin = admin
         return admin
@@ -270,12 +272,13 @@ class _Init:
             try:
                 self.guac_login(cfg.guacamole.url, user, pw, None)
             except GuacError as e:
-                hint = (
-                    " (the administrator needs a TOTP code; run interactively or use --manual)"
-                    if guacmod.challenge(e)
-                    else ""
-                )
-                return _fail(f"guacamole: {e}{hint}", 1)
+                if guacmod.challenge(e) is not None:
+                    return _fail(
+                        f"guacamole: administrator {user} needs a TOTP code; "
+                        "run `tkctl lab init` interactively or use --manual",
+                        1,
+                    )
+                return _fail(f"guacamole: {e}", 1)
             gadmin = self.guac_admin
         url = cfg.guacamole.url
         try:

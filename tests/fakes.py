@@ -287,6 +287,9 @@ class FakePveAdmin:
     def vmid_free(self, vmid):
         return True
 
+    def vm_is_template(self, vmid):
+        return False
+
 
 class FakeGuacAdmin:
     """Admin-side Guacamole for setup tests; also fakes the service account's own login."""

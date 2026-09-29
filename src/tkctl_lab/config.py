@@ -77,7 +77,7 @@ INIT_TEMPLATE = """# tkctl lab configuration. Secrets live in lab.env next to th
 #   TK_LAB_GUAC_TOTP_SECRET the account's TOTP secret, only when Guacamole enforces TOTP
 [pve]
 url = "https://pve-node1:8006"
-token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tkctl lab init` prints the pveum commands
+token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tkctl lab init` creates it
 build_token_id = "lab@pve!tkctl-build"   # may write images and fetch URLs; used by create template
 node = "auto"                    # node for new VMs; "auto" picks the one with the most free memory
 pool = "lab"                     # every VM this tool touches lives in this pool

@@ -116,3 +116,12 @@ def test_manual_guacamole_lists_the_three_permissions():
 def test_new_password_is_24_alnum():
     p = setup.new_password()
     assert len(p) == 24 and p.isalnum() and setup.new_password() != p
+
+
+def test_rotates_a_stale_password_instead_of_dying():
+    fake = FakeGuacAdmin(users={"tkctl-lab": "real"}, perms={"tkctl-lab": set(setup.SERVICE_PERMS)})
+    results, new_env = run(fake, {"TK_LAB_GUAC_PASSWORD": "stale"})
+    by = dict(results)
+    assert by["user tkctl-lab"] == "updated" and ("set_password", "tkctl-lab") in fake.calls
+    assert new_env["TK_LAB_GUAC_PASSWORD"] == fake.users["tkctl-lab"] != "stale"
+    assert by["totp"] == "kept"

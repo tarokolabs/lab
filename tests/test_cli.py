@@ -207,7 +207,7 @@ def init(argv, *, pve_admin=None, guac_admin=None, text=(), secrets=()):
     t, s = iter(text), iter(secrets)
     rc = cli.main(
         ["init", *argv],
-        make_admin=lambda url, user, pw: pve_admin,
+        make_admin=lambda url, user, pw, ca_file=None: pve_admin,
         make_guac_admin=lambda url, user, pw, totp: guac_admin,
         make_service_client=lambda url, u, p, secret: ServiceClient(guac_admin, u, p, secret),
         make_clients=lambda cfg, sec: (FakePve(), FakeGuac()),
@@ -313,3 +313,59 @@ def test_init_ctrl_c_leaves_nothing_behind(capsys):
     rc = cli.main(["init"], ask_text=interrupted, ask_secret=lambda q: "x")
     assert rc == 1 and not config.config_path().exists()
     assert "aborted" in capsys.readouterr().err
+
+
+def test_init_uses_the_well_known_ca_before_a_config_exists(capsys):
+    ca = config.config_path().parent / "pve-root-ca.pem"
+    ca.parent.mkdir(parents=True)
+    ca.write_text("-----BEGIN CERTIFICATE-----\nCA\n")
+    seen = {}
+
+    def make_admin(url, user, pw, ca_file=None):
+        seen["ca_file"] = ca_file
+        return FakePveAdmin(nodes=["n1"])
+
+    text = iter(["https://p", "", "", "", "", "", "", "", "https://g", ""])
+    guac_admin = FakeGuacAdmin()
+    rc = cli.main(
+        ["init"],
+        make_admin=make_admin,
+        make_guac_admin=lambda url, user, pw, totp: guac_admin,
+        make_service_client=lambda url, u, p, s: ServiceClient(guac_admin, u, p, s),
+        ask_text=lambda q, d: next(text) or d,
+        ask_secret=lambda q: "pw",
+        fetch=lambda url: SUMS,
+    )
+    assert rc == 0 and seen["ca_file"] == str(ca)
+
+
+def test_init_guacamole_totp_admin_message_does_not_point_at_the_service_secret(
+    monkeypatch, capsys
+):
+    from tkctl_lab.guac import GuacError
+
+    monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
+    config.config_path().parent.mkdir(parents=True)
+    config.config_path().write_text(setup.render_config(answers()))
+
+    class NeedsCode(FakeGuacAdmin):
+        def login(self, totp=None):
+            raise GuacError(
+                403, "Verification code required", {"expected": [{"name": "guac-totp"}]}
+            )
+
+    rc, *_ = init(["guacamole"], guac_admin=NeedsCode())
+    err = capsys.readouterr().err
+    assert rc == 1 and "TOTP" in err and "--manual" in err
+    assert "TK_LAB_GUAC_TOTP_SECRET" not in err
+
+
+def test_init_403_hint_names_sys_modify(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+
+    class Forbidden(FakePveAdmin):
+        def role_add(self, roleid, privs):
+            raise PveError(403, "POST /access/roles: Permission check failed")
+
+    rc, *_ = init([*FLAGS], pve_admin=Forbidden(nodes=["n1"]))
+    assert rc == 1 and "Sys.Modify" in capsys.readouterr().err

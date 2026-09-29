@@ -21,7 +21,7 @@ def _is_auth_error(e: PveError) -> bool:
     return e.status == 401
 
 
-def _pve_login(ask_text, ask_secret, admin_factory, pve_url: str):
+def pve_login(ask_text, ask_secret, admin_factory, pve_url: str):
     """Ask for the administrator once, then for the password until PVE accepts it (plus a TFA
     code when PVE asks for one). Anything but a rejected login (TLS, network, 5xx) propagates."""
     pve_admin = ask_text("PVE administrator", DEFAULTS["pve_admin"])
@@ -46,7 +46,7 @@ def _pve_login(ask_text, ask_secret, admin_factory, pve_url: str):
                 print(f"  {e2}")
 
 
-def _guac_login(ask_text, ask_secret, guac_login, guac_url: str) -> tuple[str, str]:
+def guac_admin_login(ask_text, ask_secret, guac_login, guac_url: str) -> tuple[str, str]:
     guac_admin = ask_text("Guacamole administrator", DEFAULTS["guacamole_admin"])
     while True:
         guac_pw = ask_secret(f"Password for {guac_admin}")
@@ -74,7 +74,7 @@ def ask(*, admin_factory, ask_text, ask_secret, guac_login) -> tuple[Answers, ob
     logged-in PVE admin client and the Guacamole admin password, both used once and never stored.
     """
     pve_url = ask_text("PVE API URL (https://host:8006)", "")
-    admin, pve_admin = _pve_login(ask_text, ask_secret, admin_factory, pve_url)
+    admin, pve_admin = pve_login(ask_text, ask_secret, admin_factory, pve_url)
     storages = [
         s["storage"]
         for s in admin.storages()
@@ -113,7 +113,7 @@ def ask(*, admin_factory, ask_text, ask_secret, guac_login) -> tuple[Answers, ob
         else:
             break
     guac_url = ask_text("Guacamole URL", "")
-    guac_admin, guac_pw = _guac_login(ask_text, ask_secret, guac_login, guac_url)
+    guac_admin, guac_pw = guac_admin_login(ask_text, ask_secret, guac_login, guac_url)
     answers = Answers(
         pve_url=pve_url,
         pve_admin=pve_admin,

@@ -166,6 +166,11 @@ class _Init:
             lambda q, d: input(f"{q} [{d}]: " if d else f"{q}: ").strip() or d
         )
         self.ask_secret = deps.get("ask_secret") or (lambda q: getpass.getpass(f"{q}: "))
+        # Questions are only possible on a terminal (or when a test injects the askers).
+        tty = deps.get("tty")
+        if tty is None:
+            tty = deps.get("ask_secret") is not None or sys.stdin.isatty()
+        self.can_ask = tty
         self.fetch = deps.get("fetch") or setup._http_get
         # The CA fetched by an earlier `init pve` (or copied there by hand) works before any config.
         well_known = config.config_path().parent / "pve-root-ca.pem"
@@ -208,7 +213,7 @@ class _Init:
                 flags=flags,
                 file=args.file,
                 force=args.force,
-                interactive=None if args.manual else self.interactive,
+                interactive=self.interactive if (self.can_ask and not args.manual) else None,
                 fetch=self.fetch,
             )
         except setup.SetupError as e:
@@ -241,13 +246,18 @@ class _Init:
         admin = self.pve_admin
         if admin is None:
             pw = os.environ.get("TK_LAB_PVE_ADMIN_PASSWORD")
-            if not pw:
-                return _fail(
-                    "set TK_LAB_PVE_ADMIN_PASSWORD (or run `tkctl lab init` interactively)"
-                )
             user = flags.get("pve_admin") or setup.DEFAULTS["pve_admin"]
             try:
-                admin = self.admin_factory(cfg.pve.url, user, pw)
+                if pw:
+                    admin = self.admin_factory(cfg.pve.url, user, pw)
+                elif self.can_ask:
+                    admin, _ = prompt.pve_login(
+                        self.ask_text, self.ask_secret, self.admin_factory, cfg.pve.url
+                    )
+                else:
+                    return _fail(
+                        "set TK_LAB_PVE_ADMIN_PASSWORD (or run `tkctl lab init` on a terminal)"
+                    )
             except PveError as e:
                 return _fail(f"pve: {e}", 1)
         ca_path = config.config_path().parent / "pve-root-ca.pem"
@@ -264,13 +274,18 @@ class _Init:
         gadmin = self.guac_admin
         if gadmin is None:
             pw = os.environ.get("TK_LAB_GUAC_ADMIN_PASSWORD")
-            if not pw:
-                return _fail(
-                    "set TK_LAB_GUAC_ADMIN_PASSWORD (or run `tkctl lab init` interactively)"
-                )
             user = flags.get("guacamole_admin") or setup.DEFAULTS["guacamole_admin"]
             try:
-                self.guac_login(cfg.guacamole.url, user, pw, None)
+                if pw:
+                    self.guac_login(cfg.guacamole.url, user, pw, None)
+                elif self.can_ask:
+                    prompt.guac_admin_login(
+                        self.ask_text, self.ask_secret, self.guac_login, cfg.guacamole.url
+                    )
+                else:
+                    return _fail(
+                        "set TK_LAB_GUAC_ADMIN_PASSWORD (or run `tkctl lab init` on a terminal)"
+                    )
             except GuacError as e:
                 if guacmod.challenge(e) is not None:
                     return _fail(
@@ -419,6 +434,7 @@ def main(
     ask_text=None,
     ask_secret=None,
     fetch=None,
+    tty=None,
 ) -> int:
     args = build_parser().parse_args(argv)
     if args.verb == "init":
@@ -429,6 +445,7 @@ def main(
             ask_text=ask_text,
             ask_secret=ask_secret,
             fetch=fetch,
+            tty=tty,
         )
         try:
             return _Init(args, deps).run()

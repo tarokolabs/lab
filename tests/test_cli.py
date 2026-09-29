@@ -201,7 +201,7 @@ def test_progress_lines_flush_when_stdout_is_a_file():
     assert cli.log.keywords == {"flush": True}
 
 
-def init(argv, *, pve_admin=None, guac_admin=None, text=(), secrets=()):
+def init(argv, *, pve_admin=None, guac_admin=None, text=(), secrets=(), tty=True):
     pve_admin = pve_admin or FakePveAdmin(nodes=["n1"])
     guac_admin = guac_admin or FakeGuacAdmin()
     t, s = iter(text), iter(secrets)
@@ -211,9 +211,10 @@ def init(argv, *, pve_admin=None, guac_admin=None, text=(), secrets=()):
         make_guac_admin=lambda url, user, pw, totp: guac_admin,
         make_service_client=lambda url, u, p, secret: ServiceClient(guac_admin, u, p, secret),
         make_clients=lambda cfg, sec: (FakePve(), FakeGuac()),
-        ask_text=lambda q, d: next(t) or d,
-        ask_secret=lambda q: next(s),
+        ask_text=(lambda q, d: next(t) or d) if tty else None,
+        ask_secret=(lambda q: next(s)) if tty else None,
         fetch=lambda url: SUMS,
+        tty=tty,
     )
     return rc, pve_admin, guac_admin
 
@@ -240,9 +241,19 @@ def test_init_with_flags_does_all_three_and_writes_env(monkeypatch, capsys):
     assert (config.config_path().parent / "pve-root-ca.pem").exists()
 
 
-def test_init_flags_without_admin_password_is_a_usage_error(capsys):
-    rc, *_ = init(FLAGS)
+def test_init_flags_without_admin_password_is_a_usage_error_when_not_a_tty(capsys):
+    rc, *_ = init(FLAGS, tty=False)
     assert rc == 2 and "TK_LAB_PVE_ADMIN_PASSWORD" in capsys.readouterr().err
+
+
+def test_init_rerun_with_a_config_asks_for_the_admin_passwords_on_a_tty(capsys):
+    config.config_path().parent.mkdir(parents=True)
+    config.config_path().write_text(setup.render_config(answers(node="n1")))
+    # no admin passwords in the environment, but a terminal: ask for them
+    rc, pve_admin, guac_admin = init([], text=["", ""], secrets=["pve-pw", "guac-pw"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "config: kept" in out
+    assert ("login", None) in pve_admin.calls and ("create_user", "tkctl-lab") in guac_admin.calls
 
 
 def test_init_interactive_when_nothing_is_given(capsys):

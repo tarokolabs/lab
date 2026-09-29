@@ -79,7 +79,7 @@ INIT_TEMPLATE = """# tkctl lab configuration. Secrets live in lab.env next to th
 url = "https://pve-node1:8006"
 token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tkctl lab init` creates it
 build_token_id = "lab@pve!tkctl-build"   # may write images and fetch URLs; used by create template
-node = "auto"                    # node for new VMs; "auto" picks the one with the most free memory
+node = "auto"                    # node for new VMs; "auto" spreads them over the online nodes
 pool = "lab"                     # every VM this tool touches lives in this pool
 storage = "nas-nfs"              # shared storage with images, snippets and import content;
                                  # linked clones need qcow2 (NFS/dir) or thin storage, not plain LVM
@@ -101,7 +101,7 @@ disk = "60G"
 [template]
 image_url = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
 image_sha512 = "replace-with-the-value-from-SHA512SUMS"
-tk8s_version = "v2026.10.0"     # tag or branch install.sh checks out
+tk8s_version = "v2026.10.1"     # tag or branch install.sh checks out
 k8s = "1.37.0"                   # node image pre-pulled into the template
 # snippets_dir = "/mnt/snippets"  # pve.storage's snippets/ mounted here; the build writes it there
 """

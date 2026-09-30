@@ -163,3 +163,14 @@ def test_clone_storage_is_optional(tmp_path):
     p.write_text(GOOD.replace('storage = "nas-nfs"', 'storage = "nas-nfs"\nclone_storage = 3'))
     with pytest.raises(config.ConfigError, match="clone_storage"):
         config.load(p)
+
+
+def test_template_disk_defaults_small_and_is_configurable(tmp_path):
+    p = tmp_path / "lab.toml"
+    p.write_text(GOOD)
+    assert config.load(p).template.disk == "12G"
+    p.write_text(GOOD.replace("[template]\n", '[template]\ndisk = "20G"\n'))
+    assert config.load(p).template.disk == "20G"
+    p.write_text(GOOD.replace("[template]\n", "[template]\ndisk = 20\n"))
+    with pytest.raises(config.ConfigError, match=r"template\.disk"):
+        config.load(p)

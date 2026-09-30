@@ -50,7 +50,7 @@ memory = 32768
 
 ## 設定檔
 
-`pve.clone_storage`（例如 `"local-lvm"`）設了以後，學員 VM 會 **full clone** 到目標節點的本機儲存，磁碟 I/O 不再經過 NAS，開班每台約 1 到 2 分鐘；`node = "auto"` 會挑該儲存剩餘空間最多的節點、剩不到 32 GiB 的跳過。沒設就是 linked clone，11 秒一台，但所有 I/O 都走共用儲存。互動式 `init` 看到節點有 lvmthin／zfs 儲存時會問這題。
+`pve.clone_storage`（例如 `"local-lvm"`）設了以後，學員 VM 會 **full clone** 到目標節點的本機儲存，磁碟 I/O 不再經過 NAS，開班每台約 1 到 2 分鐘；`node = "auto"` 會挑該儲存剩餘空間最多的節點、剩不到 32 GiB 的跳過。沒設就是 linked clone，11 秒一台，但所有 I/O 都走共用儲存。互動式 `init` 看到節點有 lvmthin／zfs 儲存時會問這題。範本磁碟本身只有 `template.disk`（預設 12G）大，clone 後才放大到 `vm.disk`，因為 full clone 與遷移搬的是整顆虛擬磁碟。
 
 `$XDG_CONFIG_HOME/tkctl/lab.toml`（預設 `~/.config/tkctl/lab.toml`）；`tkctl lab init` 會產生含註解的範本。token 與密碼從環境變數或 `lab.env`（0600，`init` 寫的）讀，環境變數優先。PVE 的 TLS 一律驗證，自簽 CA 用 `pve.ca_file` 指定（`/etc/pve/pve-root-ca.pem`）。
 

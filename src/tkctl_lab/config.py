@@ -48,6 +48,7 @@ class TemplateConfig:
     tk8s_version: str = "main"
     k8s: str | None = None
     snippets_dir: str | None = None  # the storage's snippets/ when it is mounted locally
+    disk: str = "12G"  # the template's own disk; clones grow to vm.disk, so keep this small
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,8 @@ image_sha512 = "replace-with-the-value-from-SHA512SUMS"
 tk8s_version = "v2026.10.1"     # tag or branch install.sh checks out
 k8s = "1.37.0"                   # node image pre-pulled into the template
 # snippets_dir = "/mnt/snippets"  # pve.storage's snippets/ mounted here; the build writes it there
+# disk = "12G"                    # the template's disk; clones are grown to vm.disk, and a full
+                                 # clone or migration copies this size, so keep it small
 """
 
 
@@ -207,6 +210,9 @@ def load(path: Path | None = None) -> Config:
     snippets_dir = tpl.get("snippets_dir")
     if snippets_dir is not None and not isinstance(snippets_dir, str):
         errors.append("template.snippets_dir must be a path string")
+    template_disk = tpl.get("disk", TemplateConfig.disk)
+    if not isinstance(template_disk, str):
+        errors.append('template.disk must be a string like "12G"')
     if errors:
         raise ConfigError(f"{path}:\n  " + "\n  ".join(errors))
     assert template is not None and rng is not None  # every error path raised above
@@ -226,5 +232,6 @@ def load(path: Path | None = None) -> Config:
             tk8s_version=tpl.get("tk8s_version", "main"),
             k8s=tpl.get("k8s"),
             snippets_dir=snippets_dir,
+            disk=template_disk,
         ),
     )

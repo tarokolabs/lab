@@ -150,3 +150,16 @@ def test_secrets_fall_back_to_env_file(monkeypatch, tmp_path):
     monkeypatch.setenv("TK_LAB_PVE_TOKEN", "env-t")  # the environment wins
     assert config.secrets().pve_token == "env-t"
     assert config.merged_env()["TK_LAB_PVE_TOKEN"] == "env-t"
+
+
+def test_clone_storage_is_optional(tmp_path):
+    p = tmp_path / "lab.toml"
+    p.write_text(GOOD)
+    assert config.load(p).pve.clone_storage is None
+    p.write_text(
+        GOOD.replace('storage = "nas-nfs"', 'storage = "nas-nfs"\nclone_storage = "local-lvm"')
+    )
+    assert config.load(p).pve.clone_storage == "local-lvm"
+    p.write_text(GOOD.replace('storage = "nas-nfs"', 'storage = "nas-nfs"\nclone_storage = 3'))
+    with pytest.raises(config.ConfigError, match="clone_storage"):
+        config.load(p)

@@ -362,3 +362,16 @@ def test_admin_vm_is_template():
     c, _ = admin(TICKET | {("GET", "/cluster/resources"): res})
     assert c.vm_is_template(3900) is True and c.vm_is_template(3000) is False
     assert c.vm_is_template(4000) is False
+
+
+def test_clone_full_to_another_storage_and_storage_avail():
+    routes = {
+        ("POST", "/nodes/n1/qemu/3900/clone"): "UPID:n1:x",
+        ("GET", "/nodes/n2/storage/local-lvm/status"): {"avail": 5 * 2**30, "total": 10 * 2**30},
+    }
+    c, op = client(routes)
+    c.clone("n1", 3900, 3101, "lab-x-01", "lab", "n2", full=True, storage="local-lvm")
+    assert op.calls[0][1] == "newid=3101&name=lab-x-01&pool=lab&full=1&target=n2&storage=local-lvm"
+    assert c.storage_avail("n2", "local-lvm") == 5 * 2**30
+    c.clone("n1", 3900, 3102, "lab-x-02", "lab", "n2")  # default stays a linked clone
+    assert op.calls[-1][1] == "newid=3102&name=lab-x-02&pool=lab&full=0&target=n2"

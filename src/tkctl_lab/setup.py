@@ -87,6 +87,8 @@ def acl_plan(cfg: Config, nodes: list[str]) -> list[tuple[str, str, str]]:
             (f"/storage/{p.storage}", "TkctlLabDisk", who),
             (bridge, "TkctlLabBridge", who),
         ]
+        if p.clone_storage:
+            plan.append((f"/storage/{p.clone_storage}", "TkctlLabDisk", who))
     for who in (USER, build_token):
         plan += [
             (f"/vms/{p.template}", "TkctlLabTemplateBuild", who),
@@ -338,6 +340,7 @@ class Answers:
     guacamole_url: str
     guacamole_admin: str
     image_sha512: str
+    clone_storage: str | None = None
 
 
 DEFAULT_IMAGE = (
@@ -387,6 +390,8 @@ def render_config(a: Answers) -> str:
             f'image_sha512 = "{a.image_sha512}"'
         ),
     }
+    if a.clone_storage:
+        subs['# clone_storage = "local-lvm"'] = f'clone_storage = "{a.clone_storage}"'.ljust(30)
     for old, new in subs.items():
         assert old in text, old
         text = text.replace(old, new, 1)

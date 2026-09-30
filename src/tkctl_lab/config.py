@@ -24,6 +24,7 @@ class PveConfig:
     bridge: str
     ca_file: str | None = None
     build_token_id: str | None = None  # only `create template` uses it
+    clone_storage: str | None = None  # node-local storage for full clones; None = linked clones
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,8 @@ node = "auto"                    # node for new VMs; "auto" spreads them over th
 pool = "lab"                     # every VM this tool touches lives in this pool
 storage = "nas-nfs"              # shared storage with images, snippets and import content;
                                  # linked clones need qcow2 (NFS/dir) or thin storage, not plain LVM
+# clone_storage = "local-lvm"    # node-local storage for student VMs (full clones, local I/O);
+                                 # unset: linked clones on `storage`, all disk I/O over the network
 template = 3900                  # template VMID (built by `tkctl lab create template`)
 vmid_range = [3100, 3199]        # VMIDs for student VMs
 bridge = "vmbr0"
@@ -190,6 +193,9 @@ def load(path: Path | None = None) -> Config:
     build_token_id = pve.get("build_token_id")
     if build_token_id is not None and not isinstance(build_token_id, str):
         errors.append("pve.build_token_id must be a string like user@realm!tokenid")
+    clone_storage = pve.get("clone_storage")
+    if clone_storage is not None and not isinstance(clone_storage, str):
+        errors.append("pve.clone_storage must be a storage name like local-lvm")
     g = {k: _require(guac, k, str, errors, "guacamole") for k in ("url", "username")}
     v = {k: vm.get(k, getattr(VmConfig, k)) for k in ("cores", "memory", "balloon", "disk")}
     for k in ("cores", "memory", "balloon"):
@@ -211,6 +217,7 @@ def load(path: Path | None = None) -> Config:
             vmid_range=(rng[0], rng[1]),
             ca_file=ca_file,
             build_token_id=build_token_id,
+            clone_storage=clone_storage,
         ),
         guacamole=GuacConfig(**g),
         vm=VmConfig(**v),

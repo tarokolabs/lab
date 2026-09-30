@@ -23,6 +23,7 @@ def answers(**kw):
         guacamole_url="https://guac",
         guacamole_admin="guacadmin",
         image_sha512="abc123",
+        clone_storage=None,
     )
     return setup.Answers(**(base | kw))
 
@@ -300,3 +301,73 @@ def test_prompt_validates_the_student_range():
         3100,
         3199,
     )  # reversed, overlapping the template, and garbage were re-asked
+
+
+def test_render_config_writes_clone_storage_when_chosen(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    p = tmp_path / "lab.toml"
+    p.write_text(setup.render_config(answers(clone_storage="local-lvm")))
+    assert config.load(p).pve.clone_storage == "local-lvm"
+    p.write_text(setup.render_config(answers()))
+    assert config.load(p).pve.clone_storage is None
+
+
+def test_ensure_config_flag_clone_storage(tmp_path):
+    flags = {
+        "pve_url": "https://p",
+        "storage": "nas-nfs",
+        "guacamole_url": "https://g",
+        "clone_storage": "local-lvm",
+    }
+    c, _ = ensure(path=tmp_path / "lab.toml", flags=flags)
+    assert c.pve.clone_storage == "local-lvm"
+
+
+def test_prompt_offers_node_local_storages_for_clones():
+    class WithLocal(FakePveAdmin):
+        def storages(self):
+            return [
+                {
+                    "storage": "nas-nfs",
+                    "type": "nfs",
+                    "content": "images,snippets,import",
+                    "shared": 1,
+                },
+                {
+                    "storage": "local-lvm",
+                    "type": "lvmthin",
+                    "content": "images,rootdir",
+                    "shared": 0,
+                },
+                {"storage": "local", "type": "dir", "content": "iso,vztmpl", "shared": 0},
+            ]
+
+    seen = []
+    # url, admin, storage, clone storage (default local-lvm), bridge, node, pool, template,
+    # range, guac url, guac admin
+    script = iter(["https://p", "", "", "", "", "", "", "", "", "https://g", ""])
+
+    def ask_text(q, d):
+        seen.append((q, d))
+        return next(script) or d
+
+    a, _, _ = prompt.ask(
+        admin_factory=lambda u, us, p: WithLocal(nodes=["n1"]),
+        ask_text=ask_text,
+        ask_secret=lambda q: "pw",
+        guac_login=lambda *a: None,
+    )
+    assert a.clone_storage == "local-lvm"
+    q, d = next(x for x in seen if "student VMs" in x[0])
+    assert "local-lvm" in q and "local" not in q.replace("local-lvm", "") and d == "local-lvm"
+
+
+def test_prompt_skips_the_clone_storage_question_without_local_storage():
+    script = iter(TEXT)
+    a, _, _ = prompt.ask(
+        admin_factory=lambda u, us, p: FakePveAdmin(nodes=["n1"]),
+        ask_text=lambda q, d: next(script) or d,
+        ask_secret=lambda q: "pw",
+        guac_login=lambda *a: None,
+    )
+    assert a.clone_storage is None

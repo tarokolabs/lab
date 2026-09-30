@@ -174,3 +174,16 @@ def test_template_disk_defaults_small_and_is_configurable(tmp_path):
     p.write_text(GOOD.replace("[template]\n", "[template]\ndisk = 20\n"))
     with pytest.raises(config.ConfigError, match=r"template\.disk"):
         config.load(p)
+
+
+def test_pve_nodes_allow_list_is_optional(tmp_path):
+    p = tmp_path / "lab.toml"
+    p.write_text(GOOD)
+    assert config.load(p).pve.nodes == ()
+    p.write_text(
+        GOOD.replace('node = "pve-node7"', 'node = "auto"\nnodes = ["pve-node6", "pve-node7"]')
+    )
+    assert config.load(p).pve.nodes == ("pve-node6", "pve-node7")
+    p.write_text(GOOD.replace('node = "pve-node7"', 'node = "auto"\nnodes = "pve-node6"'))
+    with pytest.raises(config.ConfigError, match=r"pve\.nodes"):
+        config.load(p)

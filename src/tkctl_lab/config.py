@@ -25,6 +25,7 @@ class PveConfig:
     ca_file: str | None = None
     build_token_id: str | None = None  # only `create template` uses it
     clone_storage: str | None = None  # node-local storage for full clones; None = linked clones
+    nodes: tuple[str, ...] = ()  # nodes `auto` may use; empty = every online node
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ url = "https://pve-node1:8006"
 token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tkctl lab init` creates it
 build_token_id = "lab@pve!tkctl-build"   # may write images and fetch URLs; used by create template
 node = "auto"                    # node for new VMs; "auto" spreads them over the online nodes
+# nodes = ["pve-node6", "pve-node7"]  # the nodes "auto" may pick; unset = all online nodes
 pool = "lab"                     # every VM this tool touches lives in this pool
 storage = "nas-nfs"              # shared storage with images, snippets and import content;
                                  # linked clones need qcow2 (NFS/dir) or thin storage, not plain LVM
@@ -199,6 +201,10 @@ def load(path: Path | None = None) -> Config:
     clone_storage = pve.get("clone_storage")
     if clone_storage is not None and not isinstance(clone_storage, str):
         errors.append("pve.clone_storage must be a storage name like local-lvm")
+    nodes = pve.get("nodes", [])
+    if not isinstance(nodes, list) or not all(isinstance(n, str) for n in nodes):
+        errors.append('pve.nodes must be a list of node names like ["pve-node6", "pve-node7"]')
+        nodes = []
     g = {k: _require(guac, k, str, errors, "guacamole") for k in ("url", "username")}
     v = {k: vm.get(k, getattr(VmConfig, k)) for k in ("cores", "memory", "balloon", "disk")}
     for k in ("cores", "memory", "balloon"):
@@ -224,6 +230,7 @@ def load(path: Path | None = None) -> Config:
             ca_file=ca_file,
             build_token_id=build_token_id,
             clone_storage=clone_storage,
+            nodes=tuple(nodes),
         ),
         guacamole=GuacConfig(**g),
         vm=VmConfig(**v),

@@ -385,20 +385,38 @@ def local_cfg():
     )
 
 
-def test_clone_storage_makes_full_clones_with_a_longer_wait():
+def test_clone_storage_makes_full_clones_on_the_template_node_then_migrates():
+    # PVE cannot clone onto another node's local storage: clone next to the template, then
+    # move the stopped VM (disk included) to the node that was picked
     pve, guac = FakePve(), FakeGuac()
     (e,) = provision.create(cd(["alice"]), local_cfg(), pve, guac, parallel=1, **QUIET)
-    assert e.error == ""
-    assert (
-        "clone",
-        "pve-node6",
-        3100,
-        "lab-k8s-101-alice",
-        "pve-node7",
-        True,
-        "local-lvm",
-    ) in pve.calls
+    assert e.error == "" and e.node == "pve-node7"
+    clone = ("clone", "pve-node6", 3100, "lab-k8s-101-alice", "pve-node6", True, "local-lvm")
+    assert clone in pve.calls
     assert ("wait", "UPID:pve-node6:clone-3100", provision.FULL_CLONE_TIMEOUT) in pve.calls
+    assert ("migrate", "pve-node6", 3100, "pve-node7") in pve.calls
+    assert ("wait", "UPID:pve-node6:migrate-3100", provision.FULL_CLONE_TIMEOUT) in pve.calls
+    names = [c[0] for c in pve.calls]
+    assert names.index("migrate") < names.index("config")  # configured and started on the target
+    assert pve.vms[3100]["node"] == "pve-node7"
+
+
+def test_clone_storage_skips_the_migration_when_the_target_is_the_template_node():
+    pve = FakePve(nodes=("pve-node6",))  # the template lives on pve-node6
+    (e,) = provision.create(cd(["alice"]), local_cfg(), pve, FakeGuac(), parallel=1, **QUIET)
+    assert e.error == "" and e.node == "pve-node6"
+    assert not any(c[0] == "migrate" for c in pve.calls)
+
+
+def test_migration_failure_is_reported_as_a_clone_error():
+    pve = FakePve()
+
+    def migrate(node, vmid, target):
+        raise PveError(500, "migration aborted: no route to host")
+
+    pve.migrate = migrate
+    (e,) = provision.create(cd(["alice"]), local_cfg(), pve, FakeGuac(), parallel=1, **QUIET)
+    assert "migration aborted" in e.error and e.vmid == 3100 and e.node == "pve-node6"
 
 
 def test_auto_node_prefers_free_local_space_and_skips_full_nodes():

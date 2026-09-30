@@ -186,6 +186,11 @@ class Pve:
         }
         return self.request("POST", f"/nodes/{node}/qemu/{template}/clone", params)
 
+    def migrate(self, node: str, vmid: int, target: str) -> str:
+        """Move a stopped VM, local disks included, to another node."""
+        params = {"target": target, "with-local-disks": 1}
+        return self.request("POST", f"/nodes/{node}/qemu/{vmid}/migrate", params)
+
     def storage_avail(self, node: str, storage: str) -> int:
         """Free bytes on a storage as seen from a node (node-local storages differ per node)."""
         st = self.request("GET", f"/nodes/{node}/storage/{storage}/status") or {}

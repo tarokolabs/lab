@@ -375,3 +375,9 @@ def test_clone_full_to_another_storage_and_storage_avail():
     assert c.storage_avail("n2", "local-lvm") == 5 * 2**30
     c.clone("n1", 3900, 3102, "lab-x-02", "lab", "n2")  # default stays a linked clone
     assert op.calls[-1][1] == "newid=3102&name=lab-x-02&pool=lab&full=0&target=n2"
+
+
+def test_migrate_offline_with_local_disks():
+    c, op = client({("POST", "/nodes/n1/qemu/3101/migrate"): "UPID:n1:mig"})
+    assert c.migrate("n1", 3101, "n2") == "UPID:n1:mig"
+    assert op.calls[0][1] == "target=n2&with-local-disks=1"

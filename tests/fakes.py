@@ -114,6 +114,11 @@ class FakePve:
         assert upid.startswith("UPID:"), upid
         self.calls.append(("wait", upid, timeout))
 
+    def migrate(self, node, vmid, target):
+        self.calls.append(("migrate", node, vmid, target))
+        self.vms[vmid]["node"] = target
+        return f"UPID:{node}:migrate-{vmid}"
+
     def set_config(self, node, vmid, **kv):
         self.calls.append(("config", vmid, kv))
         keep = ("tags", "cores", "memory", "balloon")

@@ -78,20 +78,22 @@ class _Cloner:
         self.taken: set[int] = set()
 
     def clone(self, name: str, target: str) -> tuple[int, str]:
+        """Clone the template for `name`. With a clone storage the copy lands next to the
+        template (PVE cannot clone onto another node's local storage); the caller migrates."""
         lo, hi = self.cfg.pve.vmid_range
+        cs = self.cfg.pve.clone_storage
         with self.lock:
             while True:
                 vmid = self.pve.next_vmid(lo, hi, exclude=self.taken)
                 self.taken.add(vmid)
                 try:
-                    cs = self.cfg.pve.clone_storage
                     upid = self.pve.clone(
                         self.template_node,
                         self.cfg.pve.template,
                         vmid,
                         name,
                         self.cfg.pve.pool,
-                        target,
+                        self.template_node if cs else target,
                         full=bool(cs),
                         storage=cs,
                     )
@@ -149,12 +151,19 @@ def _clone_and_start(c: _Class, s: Student, node: str) -> roster.Entry:
         return _entry(s, 0, node, "", "", str(e))
     if want < c.template_disk:
         return _entry(s, 0, node, "", "", f"disk {s.disk} is smaller than the template disk")
+    cs = c.cfg.pve.clone_storage
+    timeout = FULL_CLONE_TIMEOUT if cs else CLONE_TIMEOUT
     try:
         vmid, upid = c.cloner.clone(name, node)
-        timeout = FULL_CLONE_TIMEOUT if c.cfg.pve.clone_storage else CLONE_TIMEOUT
         c.pve.wait_task(upid, timeout=timeout)
     except PveError as e:
         return _entry(s, 0, node, "", "", f"clone: {e}")
+    if cs and node != c.cloner.template_node:
+        # The full clone sits on the template's node; move it (disk included) to its own node.
+        try:
+            c.pve.wait_task(c.pve.migrate(c.cloner.template_node, vmid, node), timeout=timeout)
+        except PveError as e:
+            return _entry(s, vmid, c.cloner.template_node, "", "", f"clone: {e}")
     return _setup(c, s, _entry(s, vmid, node, "", "", "", vp=_password()))
 
 

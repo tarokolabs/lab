@@ -40,6 +40,7 @@ ROLES = {
         "VM.Config.Disk",
         "VM.GuestAgent.Audit",
         "Pool.Audit",  # else /cluster/resources omits the pool field and classes are invisible
+        "VM.Migrate",  # a full clone is made next to the template, then moved to its node
     ],
     "TkctlLabTemplateUse": ["VM.Audit", "VM.Clone"],
     "TkctlLabTemplateBuild": [

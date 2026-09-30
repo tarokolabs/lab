@@ -126,6 +126,19 @@ def ask(*, admin_factory, ask_text, ask_secret, guac_login) -> tuple[Answers, ob
             print(f"  the range must not include the template VMID {template}")
         else:
             break
+    while True:
+        raw = ask_text(
+            f"Nodes that may host student VMs, comma separated ({', '.join(nodes)}; all)", "all"
+        )
+        picked = (
+            ()
+            if raw.strip() in ("", "all")
+            else tuple(n.strip() for n in raw.split(",") if n.strip())
+        )
+        unknown = [n for n in picked if n not in nodes]
+        if not unknown:
+            break
+        print(f"  not online nodes: {', '.join(unknown)}")
     guac_url = ask_text("Guacamole URL", "")
     guac_admin, guac_pw = guac_admin_login(ask_text, ask_secret, guac_login, guac_url)
     answers = Answers(
@@ -141,5 +154,6 @@ def ask(*, admin_factory, ask_text, ask_secret, guac_login) -> tuple[Answers, ob
         guacamole_admin=guac_admin,
         image_sha512="",
         clone_storage=clone_storage,
+        nodes=picked,
     )
     return answers, admin, guac_pw

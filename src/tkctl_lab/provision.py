@@ -107,6 +107,14 @@ class _Cloner:
 def _pick_nodes(pve, cfg: Config) -> list[str]:
     """Online nodes for `auto`: with a clone storage, the ones with room, fullest-free first."""
     nodes = pve.online_nodes()
+    if cfg.pve.nodes:
+        allowed = [n for n in nodes if n in cfg.pve.nodes]
+        if not allowed:
+            raise ProvisionError(
+                f"none of pve.nodes ({', '.join(cfg.pve.nodes)}) is online; "
+                "fix the list or pick a node with --node"
+            )
+        nodes = allowed
     cs = cfg.pve.clone_storage
     if not cs:
         return nodes

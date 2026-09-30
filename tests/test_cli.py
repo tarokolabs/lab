@@ -257,7 +257,7 @@ def test_init_rerun_with_a_config_asks_for_the_admin_passwords_on_a_tty(capsys):
 
 
 def test_init_interactive_when_nothing_is_given(capsys):
-    text = ["https://p", "", "", "", "", "", "", "", "https://g", ""]
+    text = ["https://p", "", "", "", "", "", "", "", "", "https://g", ""]
     rc, *_ = init([], text=text, secrets=["pve-pw", "guac-pw"])
     assert rc == 0 and config.load().guacamole.url == "https://g"
     assert "next: tkctl lab create template" in capsys.readouterr().out
@@ -336,7 +336,7 @@ def test_init_uses_the_well_known_ca_before_a_config_exists(capsys):
         seen["ca_file"] = ca_file
         return FakePveAdmin(nodes=["n1"])
 
-    text = iter(["https://p", "", "", "", "", "", "", "", "https://g", ""])
+    text = iter(["https://p", "", "", "", "", "", "", "", "", "https://g", ""])
     guac_admin = FakeGuacAdmin()
     rc = cli.main(
         ["init"],

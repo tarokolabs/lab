@@ -342,6 +342,7 @@ class Answers:
     guacamole_admin: str
     image_sha512: str
     clone_storage: str | None = None
+    nodes: tuple[str, ...] = ()
 
 
 DEFAULT_IMAGE = (
@@ -393,10 +394,21 @@ def render_config(a: Answers) -> str:
     }
     if a.clone_storage:
         subs['# clone_storage = "local-lvm"'] = f'clone_storage = "{a.clone_storage}"'.ljust(30)
+    if a.nodes:
+        listed = ", ".join(f'"{n}"' for n in a.nodes)
+        subs['# nodes = ["pve-node6", "pve-node7"]'] = f"nodes = [{listed}]".ljust(35)
     for old, new in subs.items():
         assert old in text, old
         text = text.replace(old, new, 1)
     return text
+
+
+def _parse_nodes(value) -> tuple[str, ...]:
+    if not value:
+        return ()
+    if isinstance(value, str):
+        return tuple(n.strip() for n in value.split(",") if n.strip())
+    return tuple(value)
 
 
 def _parse_range(value) -> tuple[int, int]:
@@ -428,6 +440,7 @@ def ensure_config(
         values = DEFAULTS | given
         values["vmid_range"] = _parse_range(values["vmid_range"])
         values["template"] = int(values["template"])
+        values["nodes"] = _parse_nodes(values.get("nodes"))
         a = Answers(**values, image_sha512=fetch_sha512(DEFAULT_IMAGE, fetch=fetch))
     elif interactive is not None:
         a = interactive()

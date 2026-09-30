@@ -443,3 +443,52 @@ def test_auto_node_fails_clearly_when_no_node_has_room():
     pve = FakePve(nodes=("n1",), avail={("n1", "local-lvm"): 1 * 2**30})
     with pytest.raises(provision.ProvisionError, match="local-lvm"):
         provision.create(cd(["a"]), local_cfg(), pve, FakeGuac(), parallel=1, **QUIET)
+
+
+def test_auto_node_honours_the_allow_list():
+    p = CFG.pve
+    cfg = Config(
+        PveConfig(
+            p.url,
+            p.token_id,
+            "auto",
+            p.pool,
+            p.storage,
+            p.template,
+            p.vmid_range,
+            p.bridge,
+            build_token_id=p.build_token_id,
+            nodes=("pve-node8", "pve-node9", "pve-offline"),
+        ),
+        CFG.guacamole,
+        CFG.vm,
+        CFG.template,
+    )
+    pve = FakePve(nodes=("pve-node5", "pve-node8", "pve-node9"))
+    entries = provision.create(cd(["a", "b", "c"]), cfg, pve, FakeGuac(), parallel=1, **QUIET)
+    assert [e.node for e in entries] == ["pve-node8", "pve-node9", "pve-node8"]
+
+
+def test_auto_node_allow_list_with_no_online_member_is_an_error():
+    p = CFG.pve
+    cfg = Config(
+        PveConfig(
+            p.url,
+            p.token_id,
+            "auto",
+            p.pool,
+            p.storage,
+            p.template,
+            p.vmid_range,
+            p.bridge,
+            build_token_id=p.build_token_id,
+            nodes=("pve-node9",),
+        ),
+        CFG.guacamole,
+        CFG.vm,
+        CFG.template,
+    )
+    with pytest.raises(provision.ProvisionError, match="pve-node9"):
+        provision.create(
+            cd(["a"]), cfg, FakePve(nodes=("pve-node5",)), FakeGuac(), parallel=1, **QUIET
+        )

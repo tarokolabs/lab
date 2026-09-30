@@ -26,6 +26,7 @@ class FakePve:
         agent_timeout_for=(),
         snippets=(),
         imports=(),
+        avail=None,
     ):
         self.used = set(used)
         self.hidden = set(hidden)
@@ -38,6 +39,7 @@ class FakePve:
         self.agent_timeout_for = set(agent_timeout_for)
         self.snippets = list(snippets)
         self.imports = list(imports)
+        self.avail = dict(avail or {})  # (node, storage) -> free bytes
         self.vms: dict[int, dict] = {}
         self.calls: list[tuple] = []
         self.deleted: list[int] = []
@@ -79,13 +81,17 @@ class FakePve:
     def status(self, node, vmid):
         return self.vms[vmid]["status"]
 
+    def storage_avail(self, node, storage):
+        self.calls.append(("storage_avail", node, storage))
+        return self.avail.get((node, storage), 500 * 2**30)
+
     def storage_content(self, node, storage, content):
         names = self.snippets if content == "snippets" else self.imports
         return [{"volid": f"{storage}:{content}/{n}"} for n in names]
 
     # --- lifecycle
-    def clone(self, node, template, newid, name, pool, target):
-        self.calls.append(("clone", node, newid, name, target))
+    def clone(self, node, template, newid, name, pool, target, *, full=False, storage=None):
+        self.calls.append(("clone", node, newid, name, target, full, storage))
         if not self.vmid_free(newid):
             raise PveError(500, f"newid: unable to create VM {newid}: config file already exists")
         if name in self.fail_clone_for:
@@ -106,7 +112,12 @@ class FakePve:
 
     def wait_task(self, upid, timeout=300):
         assert upid.startswith("UPID:"), upid
-        self.calls.append(("wait", upid))
+        self.calls.append(("wait", upid, timeout))
+
+    def migrate(self, node, vmid, target):
+        self.calls.append(("migrate", node, vmid, target))
+        self.vms[vmid]["node"] = target
+        return f"UPID:{node}:migrate-{vmid}"
 
     def set_config(self, node, vmid, **kv):
         self.calls.append(("config", vmid, kv))

@@ -19,6 +19,9 @@ from .pve import PveError, tags
 STUDENT_USER = "student"
 ALPHABET = string.ascii_letters + string.digits
 AGENT_TIMEOUT = 300
+CLONE_TIMEOUT = 300
+FULL_CLONE_TIMEOUT = 900  # a full clone copies the template's data onto the node
+MIN_FREE = 32 * 1024**3  # a node needs this much free on the clone storage to take a VM
 SIZE_RE = re.compile(r"^(\d+)([KMGT])$")
 UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 
@@ -75,7 +78,10 @@ class _Cloner:
         self.taken: set[int] = set()
 
     def clone(self, name: str, target: str) -> tuple[int, str]:
+        """Clone the template for `name`. With a clone storage the copy lands next to the
+        template (PVE cannot clone onto another node's local storage); the caller migrates."""
         lo, hi = self.cfg.pve.vmid_range
+        cs = self.cfg.pve.clone_storage
         with self.lock:
             while True:
                 vmid = self.pve.next_vmid(lo, hi, exclude=self.taken)
@@ -87,13 +93,31 @@ class _Cloner:
                         vmid,
                         name,
                         self.cfg.pve.pool,
-                        target,
+                        self.template_node if cs else target,
+                        full=bool(cs),
+                        storage=cs,
                     )
                 except PveError as e:
                     if "already exists" in str(e):
                         continue
                     raise
                 return vmid, upid
+
+
+def _pick_nodes(pve, cfg: Config) -> list[str]:
+    """Online nodes for `auto`: with a clone storage, the ones with room, fullest-free first."""
+    nodes = pve.online_nodes()
+    cs = cfg.pve.clone_storage
+    if not cs:
+        return nodes
+    free = {n: pve.storage_avail(n, cs) for n in nodes}
+    roomy = sorted((n for n in nodes if free[n] >= MIN_FREE), key=lambda n: -free[n])
+    if not roomy:
+        raise ProvisionError(
+            f"no online node has {MIN_FREE // 1024**3} GiB free on {cs}; "
+            "free space or pick a node with --node"
+        )
+    return roomy
 
 
 class _Class:
@@ -108,7 +132,7 @@ class _Class:
         tpl = pve.vm_config(template_node, cfg.pve.template)
         self.template_disk = size_bytes(_disk_size(tpl, cfg.vm.disk))
         fixed = cd.node or cfg.pve.node
-        self.nodes = pve.online_nodes() if fixed == "auto" else [fixed]
+        self.nodes = _pick_nodes(pve, cfg) if fixed == "auto" else [fixed]
 
     def node_for(self, index: int) -> str:
         return self.nodes[index % len(self.nodes)]
@@ -127,11 +151,19 @@ def _clone_and_start(c: _Class, s: Student, node: str) -> roster.Entry:
         return _entry(s, 0, node, "", "", str(e))
     if want < c.template_disk:
         return _entry(s, 0, node, "", "", f"disk {s.disk} is smaller than the template disk")
+    cs = c.cfg.pve.clone_storage
+    timeout = FULL_CLONE_TIMEOUT if cs else CLONE_TIMEOUT
     try:
         vmid, upid = c.cloner.clone(name, node)
-        c.pve.wait_task(upid)
+        c.pve.wait_task(upid, timeout=timeout)
     except PveError as e:
         return _entry(s, 0, node, "", "", f"clone: {e}")
+    if cs and node != c.cloner.template_node:
+        # The full clone sits on the template's node; move it (disk included) to its own node.
+        try:
+            c.pve.wait_task(c.pve.migrate(c.cloner.template_node, vmid, node), timeout=timeout)
+        except PveError as e:
+            return _entry(s, vmid, c.cloner.template_node, "", "", f"clone: {e}")
     return _setup(c, s, _entry(s, vmid, node, "", "", "", vp=_password()))
 
 

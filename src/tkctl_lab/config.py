@@ -24,6 +24,7 @@ class PveConfig:
     bridge: str
     ca_file: str | None = None
     build_token_id: str | None = None  # only `create template` uses it
+    clone_storage: str | None = None  # node-local storage for full clones; None = linked clones
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class TemplateConfig:
     tk8s_version: str = "main"
     k8s: str | None = None
     snippets_dir: str | None = None  # the storage's snippets/ when it is mounted locally
+    disk: str = "12G"  # the template's own disk; clones grow to vm.disk, so keep this small
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,8 @@ node = "auto"                    # node for new VMs; "auto" spreads them over th
 pool = "lab"                     # every VM this tool touches lives in this pool
 storage = "nas-nfs"              # shared storage with images, snippets and import content;
                                  # linked clones need qcow2 (NFS/dir) or thin storage, not plain LVM
+# clone_storage = "local-lvm"    # node-local storage for student VMs (full clones, local I/O);
+                                 # unset: linked clones on `storage`, all disk I/O over the network
 template = 3900                  # template VMID (built by `tkctl lab create template`)
 vmid_range = [3100, 3199]        # VMIDs for student VMs
 bridge = "vmbr0"
@@ -104,6 +108,8 @@ image_sha512 = "replace-with-the-value-from-SHA512SUMS"
 tk8s_version = "v2026.10.1"     # tag or branch install.sh checks out
 k8s = "1.37.0"                   # node image pre-pulled into the template
 # snippets_dir = "/mnt/snippets"  # pve.storage's snippets/ mounted here; the build writes it there
+# disk = "12G"                    # the template's disk; clones are grown to vm.disk, and a full
+                                 # clone or migration copies this size, so keep it small
 """
 
 
@@ -190,6 +196,9 @@ def load(path: Path | None = None) -> Config:
     build_token_id = pve.get("build_token_id")
     if build_token_id is not None and not isinstance(build_token_id, str):
         errors.append("pve.build_token_id must be a string like user@realm!tokenid")
+    clone_storage = pve.get("clone_storage")
+    if clone_storage is not None and not isinstance(clone_storage, str):
+        errors.append("pve.clone_storage must be a storage name like local-lvm")
     g = {k: _require(guac, k, str, errors, "guacamole") for k in ("url", "username")}
     v = {k: vm.get(k, getattr(VmConfig, k)) for k in ("cores", "memory", "balloon", "disk")}
     for k in ("cores", "memory", "balloon"):
@@ -201,6 +210,9 @@ def load(path: Path | None = None) -> Config:
     snippets_dir = tpl.get("snippets_dir")
     if snippets_dir is not None and not isinstance(snippets_dir, str):
         errors.append("template.snippets_dir must be a path string")
+    template_disk = tpl.get("disk", TemplateConfig.disk)
+    if not isinstance(template_disk, str):
+        errors.append('template.disk must be a string like "12G"')
     if errors:
         raise ConfigError(f"{path}:\n  " + "\n  ".join(errors))
     assert template is not None and rng is not None  # every error path raised above
@@ -211,6 +223,7 @@ def load(path: Path | None = None) -> Config:
             vmid_range=(rng[0], rng[1]),
             ca_file=ca_file,
             build_token_id=build_token_id,
+            clone_storage=clone_storage,
         ),
         guacamole=GuacConfig(**g),
         vm=VmConfig(**v),
@@ -219,5 +232,6 @@ def load(path: Path | None = None) -> Config:
             tk8s_version=tpl.get("tk8s_version", "main"),
             k8s=tpl.get("k8s"),
             snippets_dir=snippets_dir,
+            disk=template_disk,
         ),
     )

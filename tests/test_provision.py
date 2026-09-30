@@ -53,13 +53,12 @@ def test_create_provisions_vm_and_two_connections_per_student():
     (e,) = entries
     assert (e.vmid, e.ip, e.guac_user, e.error) == (3101, "192.168.1.77", "alice", "")
     # clone is posted to the template's node and lands on the picked node
-    assert ("clone", "pve-node6", 3101, "lab-k8s-101-alice", "pve-node7") in pve.calls
+    assert ("clone", "pve-node6", 3101, "lab-k8s-101-alice", "pve-node7", False, None) in pve.calls
     # the clone task is waited on the template's node (the UPID carries it), before set_config
     waits = [c[1] for c in pve.calls if c[0] == "wait"]
     assert waits[0] == "UPID:pve-node6:clone-3101"
-    assert pve.calls.index(("wait", waits[0])) < next(
-        i for i, c in enumerate(pve.calls) if c[0] == "config"
-    )
+    first_wait = next(i for i, c in enumerate(pve.calls) if c[0] == "wait")
+    assert first_wait < next(i for i, c in enumerate(pve.calls) if c[0] == "config")
     kv = next(c[2] for c in pve.calls if c[0] == "config" and c[1] == 3101)
     assert kv["ciuser"] == "student" and kv["ipconfig0"] == "ip=dhcp" and kv["ciupgrade"] == 0
     assert e.vm_password == kv["cipassword"]
@@ -113,7 +112,7 @@ def test_create_skips_vmids_the_pool_token_cannot_see():
     (e,) = provision.create(cd(["alice"]), CFG, pve, guac, parallel=1, **QUIET)
     assert e.vmid == 3101 and e.error == ""
     assert [c for c in pve.calls if c[0] == "clone"] == [
-        ("clone", "pve-node6", 3101, "lab-k8s-101-alice", "pve-node7")
+        ("clone", "pve-node6", 3101, "lab-k8s-101-alice", "pve-node7", False, None)
     ]
 
 
@@ -124,11 +123,11 @@ def test_create_never_reuses_a_vmid_across_parallel_students():
     real_clone = pve.clone
     seen = []
 
-    def clone(node, template, newid, name, pool, target):
+    def clone(node, template, newid, name, pool, target, **kw):
         seen.append(newid)
         if newid == 3101 and seen.count(3101) == 1:
             raise PveError(500, "newid: unable to create VM 3101: config file already exists")
-        return real_clone(node, template, newid, name, pool, target)
+        return real_clone(node, template, newid, name, pool, target, **kw)
 
     pve.clone = clone
     names = ["a", "b", "c", "d", "e"]
@@ -203,7 +202,7 @@ def test_create_uses_fixed_node_when_configured():
     fixed = classdef.ClassDef("k8s-101", (student("alice"),), None, "pve-node9")
     (e,) = provision.create(fixed, CFG, pve, guac, parallel=1, **QUIET)
     assert e.node == "pve-node9"
-    assert ("clone", "pve-node6", 3100, "lab-k8s-101-alice", "pve-node9") in pve.calls
+    assert ("clone", "pve-node6", 3100, "lab-k8s-101-alice", "pve-node9", False, None) in pve.calls
     assert next(c[2] for c in pve.calls if c[0] == "config")["tags"] == "lab;class-k8s-101"
 
 
@@ -363,3 +362,84 @@ def test_resume_redoes_setup_for_a_student_whose_vm_never_started():
     configs = [c for c in pve.calls if c[0] == "config" and c[1] == 3100]
     assert len(configs) == 2 and configs[1][2]["cipassword"] == first.vm_password
     assert pve.vms[3100]["status"] == "running" and "alice" in guac.users
+
+
+def local_cfg():
+    p = CFG.pve
+    return Config(
+        PveConfig(
+            p.url,
+            p.token_id,
+            p.node,
+            p.pool,
+            p.storage,
+            p.template,
+            p.vmid_range,
+            p.bridge,
+            build_token_id=p.build_token_id,
+            clone_storage="local-lvm",
+        ),
+        CFG.guacamole,
+        CFG.vm,
+        CFG.template,
+    )
+
+
+def test_clone_storage_makes_full_clones_on_the_template_node_then_migrates():
+    # PVE cannot clone onto another node's local storage: clone next to the template, then
+    # move the stopped VM (disk included) to the node that was picked
+    pve, guac = FakePve(), FakeGuac()
+    (e,) = provision.create(cd(["alice"]), local_cfg(), pve, guac, parallel=1, **QUIET)
+    assert e.error == "" and e.node == "pve-node7"
+    clone = ("clone", "pve-node6", 3100, "lab-k8s-101-alice", "pve-node6", True, "local-lvm")
+    assert clone in pve.calls
+    assert ("wait", "UPID:pve-node6:clone-3100", provision.FULL_CLONE_TIMEOUT) in pve.calls
+    assert ("migrate", "pve-node6", 3100, "pve-node7") in pve.calls
+    assert ("wait", "UPID:pve-node6:migrate-3100", provision.FULL_CLONE_TIMEOUT) in pve.calls
+    names = [c[0] for c in pve.calls]
+    assert names.index("migrate") < names.index("config")  # configured and started on the target
+    assert pve.vms[3100]["node"] == "pve-node7"
+
+
+def test_clone_storage_skips_the_migration_when_the_target_is_the_template_node():
+    pve = FakePve(nodes=("pve-node6",))  # the template lives on pve-node6
+    (e,) = provision.create(cd(["alice"]), local_cfg(), pve, FakeGuac(), parallel=1, **QUIET)
+    assert e.error == "" and e.node == "pve-node6"
+    assert not any(c[0] == "migrate" for c in pve.calls)
+
+
+def test_migration_failure_is_reported_as_a_clone_error():
+    pve = FakePve()
+
+    def migrate(node, vmid, target):
+        raise PveError(500, "migration aborted: no route to host")
+
+    pve.migrate = migrate
+    (e,) = provision.create(cd(["alice"]), local_cfg(), pve, FakeGuac(), parallel=1, **QUIET)
+    assert "migration aborted" in e.error and e.vmid == 3100 and e.node == "pve-node6"
+
+
+def test_auto_node_prefers_free_local_space_and_skips_full_nodes():
+    avail = {
+        ("n-small", "local-lvm"): 10 * 2**30,  # below the floor: skipped
+        ("n-mid", "local-lvm"): 100 * 2**30,
+        ("n-big", "local-lvm"): 2000 * 2**30,
+    }
+    pve = FakePve(nodes=("n-small", "n-mid", "n-big"), avail=avail)
+    entries = provision.create(
+        cd(["a", "b", "c"]), local_cfg(), pve, FakeGuac(), parallel=1, **QUIET
+    )
+    assert [e.node for e in entries] == ["n-big", "n-mid", "n-big"]
+
+
+def test_auto_node_without_clone_storage_keeps_round_robin():
+    pve = FakePve(nodes=("n1", "n2"))
+    entries = provision.create(cd(["a", "b"]), CFG, pve, FakeGuac(), parallel=1, **QUIET)
+    assert [e.node for e in entries] == ["n1", "n2"]
+    assert not any(c[0] == "storage_avail" for c in pve.calls)
+
+
+def test_auto_node_fails_clearly_when_no_node_has_room():
+    pve = FakePve(nodes=("n1",), avail={("n1", "local-lvm"): 1 * 2**30})
+    with pytest.raises(provision.ProvisionError, match="local-lvm"):
+        provision.create(cd(["a"]), local_cfg(), pve, FakeGuac(), parallel=1, **QUIET)

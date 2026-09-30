@@ -169,7 +169,7 @@ def build(cfg: Config, pve, *, k8s: str | None, node: str | None, log=print) -> 
             return 1
         raise
     pve.wait_task(upid, timeout=IMPORT_TIMEOUT)
-    resize = pve.resize(node, vmid, "scsi0", cfg.vm.disk)
+    resize = pve.resize(node, vmid, "scsi0", t.disk)
     if resize:
         pve.wait_task(resize)
 

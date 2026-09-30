@@ -116,3 +116,30 @@ def test_manual_pve_script():
     assert "grant /nodes/n1 TkctlLabFetch" in auto and "grant /nodes/n2 TkctlLabFetch" in auto
     offline = setup.manual_pve(cfg("auto"), None)
     assert "grant /nodes/<node given to create template --node> TkctlLabFetch" in offline
+
+
+def test_acl_plan_and_manual_cover_the_clone_storage():
+    c = cfg("n1")
+    local = Config(
+        PveConfig(
+            c.pve.url,
+            c.pve.token_id,
+            c.pve.node,
+            c.pve.pool,
+            c.pve.storage,
+            c.pve.template,
+            c.pve.vmid_range,
+            c.pve.bridge,
+            build_token_id=c.pve.build_token_id,
+            clone_storage="local-lvm",
+        ),
+        c.guacamole,
+        c.vm,
+        c.template,
+    )
+    plan = setup.acl_plan(local, ["n1"])
+    assert ("/storage/local-lvm", "TkctlLabDisk", "lab@pve!tkctl") in plan
+    assert ("/storage/local-lvm", "TkctlLabDisk", "lab@pve") in plan
+    assert not any(p[0] == "/storage/local-lvm" and p[2].endswith("tkctl-build") for p in plan)
+    assert "grant /storage/local-lvm TkctlLabDisk 'lab@pve!tkctl'" in setup.manual_pve(local, None)
+    assert not any(p[0] == "/storage/local-lvm" for p in setup.acl_plan(c, ["n1"]))

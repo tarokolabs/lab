@@ -145,7 +145,10 @@ def test_build_sequence():
     assert "format=qcow2" in kv["scsi0"]  # linked clones on NFS need qcow2; the API default is raw
     assert kv["cicustom"] == "user=nas-nfs:snippets/tkctl-lab-template.yaml"
     assert kv["net0"] == "virtio,bridge=vmbr0" and kv["cpu"] == "x86-64-v2-AES"
-    assert ("resize", 3900, "scsi0", "60G") in pve.calls
+    # the template stays small (its content is ~5 GB); clones grow to the class size later,
+    # so full clones and migrations move 12 GB, not the 60 GB a student VM ends up with
+    assert ("resize", 3900, "scsi0", "12G") in pve.calls
+    assert not any(c[0] == "resize" and c[3] == "60G" for c in pve.calls)
     # clones must get PVE's generated user-data (ciuser/cipassword), not the build snippet
     assert next(c for c in pve.calls if c[0] == "config")[2] == {"delete": "cicustom"}
 

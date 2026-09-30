@@ -84,7 +84,21 @@ def ask(*, admin_factory, ask_text, ask_secret, guac_login) -> tuple[Answers, ob
         raise SetupError(
             "no shared storage offers images, snippets and import content; add one in PVE first"
         )
-    storage = _choose(ask_text, "Storage for the template and clones", storages, storages[0])
+    storage = _choose(ask_text, "Storage for the template", storages, storages[0])
+    node_local = [
+        s["storage"]
+        for s in admin.storages()
+        if not s.get("shared") and s.get("type") in ("lvmthin", "zfspool")
+    ]
+    clone_storage = None
+    if node_local:
+        picked = _choose(
+            ask_text,
+            f"Node storage for student VMs (none: linked clones on {storage})",
+            [*node_local, "none"],
+            node_local[0],
+        )
+        clone_storage = None if picked == "none" else picked
     nodes = admin.nodes()
     bridges = admin.bridges(nodes[0]) or [DEFAULTS["bridge"]]
     default_bridge = DEFAULTS["bridge"] if DEFAULTS["bridge"] in bridges else bridges[0]
@@ -126,5 +140,6 @@ def ask(*, admin_factory, ask_text, ask_secret, guac_login) -> tuple[Answers, ob
         guacamole_url=guac_url,
         guacamole_admin=guac_admin,
         image_sha512="",
+        clone_storage=clone_storage,
     )
     return answers, admin, guac_pw

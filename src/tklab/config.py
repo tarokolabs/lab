@@ -72,15 +72,15 @@ PVE_BUILD_TOKEN_ENV = "TK_LAB_PVE_BUILD_TOKEN"
 GUAC_PASSWORD_ENV = "TK_LAB_GUAC_PASSWORD"
 GUAC_TOTP_ENV = "TK_LAB_GUAC_TOTP_SECRET"
 
-INIT_TEMPLATE = """# tkctl lab configuration. Secrets live in lab.env next to this file (written by
-# `tkctl lab init`, mode 0600) or in the environment, which wins:
+INIT_TEMPLATE = """# tklab configuration. Secrets live in secrets.env next to this file (written by
+# `tklab init`, mode 0600) or in the environment, which wins:
 #   TK_LAB_PVE_TOKEN        the PVE API token secret (classes)
 #   TK_LAB_PVE_BUILD_TOKEN  the build token secret (`create template` only)
 #   TK_LAB_GUAC_PASSWORD    the Guacamole service account password
 #   TK_LAB_GUAC_TOTP_SECRET the account's TOTP secret, only when Guacamole enforces TOTP
 [pve]
 url = "https://pve-node1:8006"
-token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tkctl lab init` creates it
+token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tklab init` creates it
 build_token_id = "lab@pve!tkctl-build"   # may write images and fetch URLs; used by create template
 node = "auto"                    # node for new VMs; "auto" spreads them over the online nodes
 # nodes = ["pve-node6", "pve-node7"]  # the nodes "auto" may pick; unset = all online nodes
@@ -89,7 +89,7 @@ storage = "nas-nfs"              # shared storage with images, snippets and impo
                                  # linked clones need qcow2 (NFS/dir) or thin storage, not plain LVM
 # clone_storage = "local-lvm"    # node-local storage for student VMs (full clones, local I/O);
                                  # unset: linked clones on `storage`, all disk I/O over the network
-template = 3900                  # template VMID (built by `tkctl lab create template`)
+template = 3900                  # template VMID (built by `tklab create template`)
 vmid_range = [3100, 3199]        # VMIDs for student VMs
 bridge = "vmbr0"
 # ca_file = "/path/to/pve-root-ca.pem"   # PVE's CA (/etc/pve/pve-root-ca.pem); default: system CAs
@@ -117,12 +117,12 @@ k8s = "1.37.0"                   # node image pre-pulled into the template
 
 def config_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "tkctl" / "lab.toml"
+    return Path(base) / "tklab" / "config.toml"
 
 
 def state_dir() -> Path:
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(base) / "tkctl" / "lab"
+    return Path(base) / "tklab"
 
 
 def merged_env() -> dict[str, str]:
@@ -175,7 +175,7 @@ def load(path: Path | None = None) -> Config:
     try:
         raw = tomllib.loads(path.read_text())
     except FileNotFoundError as e:
-        raise ConfigError(f"config not found: {path} (run: tkctl lab init)") from e
+        raise ConfigError(f"config not found: {path} (run: tklab init)") from e
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from e
     errors: list[str] = []

@@ -226,7 +226,7 @@ def _connect(c: _Class, s: Student, e: roster.Entry, *, resume: bool) -> roster.
     if not ip:
         why = (
             f"guest agent reported no IPv4 address within {AGENT_TIMEOUT}s; check the VM console, "
-            f"then rerun `tkctl lab create class` for {c.cd.name} to finish this student"
+            f"then rerun `tklab create class` for {c.cd.name} to finish this student"
         )
         return _entry(s, e.vmid, e.node, "unknown", "", why, vp=e.vm_password)
     guac_password = _password()

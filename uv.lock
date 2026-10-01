@@ -89,7 +89,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tkctl-lab"
+name = "tklab"
 version = "0.1.0"
 source = { editable = "." }
 

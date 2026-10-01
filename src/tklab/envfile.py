@@ -15,7 +15,7 @@ KEYS = (
 
 def path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "tkctl" / "lab.env"
+    return Path(base) / "tklab" / "secrets.env"
 
 
 def read(p: Path) -> dict[str, str]:
@@ -39,7 +39,7 @@ def write(p: Path, values: dict[str, str]) -> None:
     """Replace or append the given keys; every other line stays as it was."""
     foreign = [k for k in values if k not in KEYS]
     if foreign:
-        raise ValueError(f"not a tkctl lab secret: {', '.join(foreign)}")
+        raise ValueError(f"not a tklab secret: {', '.join(foreign)}")
     try:
         lines = p.read_text().splitlines()
     except FileNotFoundError:

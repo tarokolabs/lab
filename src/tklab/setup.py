@@ -121,13 +121,13 @@ def reconcile_pve(
     if USER in admin.users():
         results.append((f"user {USER}", "kept"))
     else:
-        admin.user_add(USER, "tkctl lab service account")
+        admin.user_add(USER, "tklab service account")
         results.append((f"user {USER}", "created"))
 
     if cfg.pve.pool in admin.pools():
         results.append((f"pool {cfg.pve.pool}", "kept"))
     else:
-        admin.pool_add(cfg.pve.pool, "tkctl lab classes")
+        admin.pool_add(cfg.pve.pool, "tklab classes")
         results.append((f"pool {cfg.pve.pool}", "created"))
 
     have = admin.tokens(USER)
@@ -176,8 +176,8 @@ def reconcile_pve(
 
 MANUAL_PVE = """# Run once as a PVE administrator.
 {roles}
-pveum user add lab@pve --comment "tkctl lab service account"
-pveum pool add {pool} --comment "tkctl lab classes"
+pveum user add lab@pve --comment "tklab service account"
+pveum pool add {pool} --comment "tklab classes"
 pveum user token add lab@pve tkctl --privsep 1        # -> TK_LAB_PVE_TOKEN
 pveum user token add lab@pve tkctl-build --privsep 1  # -> TK_LAB_PVE_BUILD_TOKEN
 grant() {{  # path role token: the user and the privilege-separated token both need the ACL
@@ -445,9 +445,7 @@ def ensure_config(
     elif interactive is not None:
         a = interactive()
     else:
-        raise SetupError(
-            "no config yet: run `tkctl lab init` interactively, pass flags, or -f FILE"
-        )
+        raise SetupError("no config yet: run `tklab init` interactively, pass flags, or -f FILE")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_config(a))
     return configmod.load(path), "created"

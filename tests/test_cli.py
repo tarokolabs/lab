@@ -229,8 +229,8 @@ def test_init_with_flags_does_all_three_and_writes_env(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert config.config_path().exists() and config.load().pve.storage == "nas-nfs"
-    assert "config: created" in out and "TkctlLabClass: created" in out
-    assert "user tkctl-lab: created" in out
+    assert "config: created" in out and "TklabClass: created" in out
+    assert "user tklab: created" in out
     from tklab import envfile
 
     e = envfile.read(envfile.path())
@@ -253,7 +253,7 @@ def test_init_rerun_with_a_config_asks_for_the_admin_passwords_on_a_tty(capsys):
     rc, pve_admin, guac_admin = init([], text=["", ""], secrets=["pve-pw", "guac-pw"])
     out = capsys.readouterr().out
     assert rc == 0 and "config: kept" in out
-    assert ("login", None) in pve_admin.calls and ("create_user", "tkctl-lab") in guac_admin.calls
+    assert ("login", None) in pve_admin.calls and ("create_user", "tklab") in guac_admin.calls
 
 
 def test_init_interactive_when_nothing_is_given(capsys):
@@ -280,7 +280,7 @@ def test_init_guacamole_only(monkeypatch, capsys):
     config.config_path().parent.mkdir(parents=True)
     config.config_path().write_text(setup.render_config(answers()))
     rc, pve_admin, guac_admin = init(["guacamole"])
-    assert rc == 0 and pve_admin.calls == [] and ("create_user", "tkctl-lab") in guac_admin.calls
+    assert rc == 0 and pve_admin.calls == [] and ("create_user", "tklab") in guac_admin.calls
 
 
 def test_init_manual_prints_script_and_checklist_without_connecting(capsys):
@@ -289,8 +289,8 @@ def test_init_manual_prints_script_and_checklist_without_connecting(capsys):
     rc, pve_admin, guac_admin = init(["--manual"])
     out = capsys.readouterr().out
     assert rc == 0 and pve_admin.calls == [] and guac_admin.calls == []
-    assert "pveum role add TkctlLabClass" in out
-    assert "grant /nodes/pve-node7 TkctlLabFetch" in out
+    assert "pveum role add TklabClass" in out
+    assert "grant /nodes/pve-node7 TklabFetch" in out
     assert "Create new connection groups" in out
 
 

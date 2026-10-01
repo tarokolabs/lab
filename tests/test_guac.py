@@ -250,28 +250,28 @@ def test_admin_user_methods_shapes():
     )
     routes = {
         ("GET", f"{DS}/users/nobody"): missing,
-        ("GET", f"{DS}/users/tkctl-lab"): {"username": "tkctl-lab", "attributes": {}},
-        ("PUT", f"{DS}/users/tkctl-lab"): None,
-        ("GET", f"{DS}/users/tkctl-lab/permissions"): {
+        ("GET", f"{DS}/users/tklab"): {"username": "tklab", "attributes": {}},
+        ("PUT", f"{DS}/users/tklab"): None,
+        ("GET", f"{DS}/users/tklab/permissions"): {
             "systemPermissions": ["CREATE_USER"],
             "connectionPermissions": {},
         },
-        ("PATCH", f"{DS}/users/tkctl-lab/permissions"): None,
+        ("PATCH", f"{DS}/users/tklab/permissions"): None,
         ("DELETE", "/tokens/T"): None,
     }
     c, op = client(routes)
     assert c.get_user("nobody") is None
-    assert c.get_user("tkctl-lab")["username"] == "tkctl-lab"
-    c.set_password("tkctl-lab", "new-pw")
-    assert c.system_permissions("tkctl-lab") == {"CREATE_USER"}
-    c.grant_system("tkctl-lab", ["CREATE_CONNECTION", "CREATE_CONNECTION_GROUP"])
-    c.clear_totp("tkctl-lab")
+    assert c.get_user("tklab")["username"] == "tklab"
+    c.set_password("tklab", "new-pw")
+    assert c.system_permissions("tklab") == {"CREATE_USER"}
+    c.grant_system("tklab", ["CREATE_CONNECTION", "CREATE_CONNECTION_GROUP"])
+    c.clear_totp("tklab")
     c.logout()
     b = bodies(op)
-    puts = [json.loads(x) for (k, x, _) in op.calls if k == ("PUT", f"{DS}/users/tkctl-lab") and x]
-    assert puts[0] == {"username": "tkctl-lab", "password": "new-pw", "attributes": {}}
+    puts = [json.loads(x) for (k, x, _) in op.calls if k == ("PUT", f"{DS}/users/tklab") and x]
+    assert puts[0] == {"username": "tklab", "password": "new-pw", "attributes": {}}
     assert puts[1]["attributes"] == {"guac-totp-key-secret": "", "guac-totp-key-confirmed": "false"}
-    assert b[("PATCH", f"{DS}/users/tkctl-lab/permissions")] == [
+    assert b[("PATCH", f"{DS}/users/tklab/permissions")] == [
         {"op": "add", "path": "/systemPermissions", "value": "CREATE_CONNECTION"},
         {"op": "add", "path": "/systemPermissions", "value": "CREATE_CONNECTION_GROUP"},
     ]

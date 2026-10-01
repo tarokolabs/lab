@@ -19,8 +19,8 @@ class SetupError(Exception):
 
 
 USER = "lab@pve"
-TOKENS = ("tkctl", "tkctl-build")
-TOKEN_ENV = {"tkctl": "TK_LAB_PVE_TOKEN", "tkctl-build": "TK_LAB_PVE_BUILD_TOKEN"}
+TOKENS = ("tklab", "tklab-build")
+TOKEN_ENV = {"tklab": "TK_LAB_PVE_TOKEN", "tklab-build": "TK_LAB_PVE_BUILD_TOKEN"}
 Result = tuple[str, str]  # (item, created | updated | kept | removed | foreign)
 
 # Least privilege. Two tokens on one user: the class token can clone the template and manage
@@ -29,7 +29,7 @@ Result = tuple[str, str]  # (item, created | updated | kept | removed | foreign)
 # for VMs, so VMs outside the pool stay out of reach. Both the user and each token need the
 # ACLs because the tokens are privilege-separated.
 ROLES = {
-    "TkctlLabClass": [
+    "TklabClass": [
         "VM.Audit",
         "VM.Allocate",
         "VM.PowerMgmt",
@@ -42,8 +42,8 @@ ROLES = {
         "Pool.Audit",  # else /cluster/resources omits the pool field and classes are invisible
         "VM.Migrate",  # a full clone is made next to the template, then moved to its node
     ],
-    "TkctlLabTemplateUse": ["VM.Audit", "VM.Clone"],
-    "TkctlLabTemplateBuild": [
+    "TklabTemplateUse": ["VM.Audit", "VM.Clone"],
+    "TklabTemplateBuild": [
         "VM.Audit",
         "VM.Allocate",
         "VM.PowerMgmt",
@@ -55,23 +55,23 @@ ROLES = {
         "VM.Config.HWType",
         "VM.Config.Network",
     ],
-    "TkctlLabDisk": ["Datastore.AllocateSpace", "Datastore.Audit"],
+    "TklabDisk": ["Datastore.AllocateSpace", "Datastore.Audit"],
     # Datastore.Allocate: PVE only lets a caller see or reference snippets with it. It also allows
     # deleting volumes on the storage, so it sits on the build token alone; remove that token
     # once the template exists.
-    "TkctlLabImage": [
+    "TklabImage": [
         "Datastore.AllocateSpace",
         "Datastore.AllocateTemplate",
         "Datastore.Allocate",
         "Datastore.Audit",
     ],
-    "TkctlLabBridge": ["SDN.Use"],
-    "TkctlLabFetch": ["Sys.AccessNetwork"],
+    "TklabBridge": ["SDN.Use"],
+    "TklabFetch": ["Sys.AccessNetwork"],
 }
 
 
 def _principals(cfg: Config) -> tuple[str, str]:
-    return cfg.pve.token_id, cfg.pve.build_token_id or f"{USER}!tkctl-build"
+    return cfg.pve.token_id, cfg.pve.build_token_id or f"{USER}!tklab-build"
 
 
 def acl_plan(cfg: Config, nodes: list[str]) -> list[tuple[str, str, str]]:
@@ -83,20 +83,20 @@ def acl_plan(cfg: Config, nodes: list[str]) -> list[tuple[str, str, str]]:
     plan: list[tuple[str, str, str]] = []
     for who in (USER, class_token):
         plan += [
-            (f"/pool/{p.pool}", "TkctlLabClass", who),
-            (f"/vms/{p.template}", "TkctlLabTemplateUse", who),
-            (f"/storage/{p.storage}", "TkctlLabDisk", who),
-            (bridge, "TkctlLabBridge", who),
+            (f"/pool/{p.pool}", "TklabClass", who),
+            (f"/vms/{p.template}", "TklabTemplateUse", who),
+            (f"/storage/{p.storage}", "TklabDisk", who),
+            (bridge, "TklabBridge", who),
         ]
         if p.clone_storage:
-            plan.append((f"/storage/{p.clone_storage}", "TkctlLabDisk", who))
+            plan.append((f"/storage/{p.clone_storage}", "TklabDisk", who))
     for who in (USER, build_token):
         plan += [
-            (f"/vms/{p.template}", "TkctlLabTemplateBuild", who),
-            (f"/storage/{p.storage}", "TkctlLabImage", who),
-            (bridge, "TkctlLabBridge", who),
+            (f"/vms/{p.template}", "TklabTemplateBuild", who),
+            (f"/storage/{p.storage}", "TklabImage", who),
+            (bridge, "TklabBridge", who),
         ]
-        plan += [(f"/nodes/{n}", "TkctlLabFetch", who) for n in build_nodes]
+        plan += [(f"/nodes/{n}", "TklabFetch", who) for n in build_nodes]
     return plan
 
 
@@ -178,8 +178,8 @@ MANUAL_PVE = """# Run once as a PVE administrator.
 {roles}
 pveum user add lab@pve --comment "tklab service account"
 pveum pool add {pool} --comment "tklab classes"
-pveum user token add lab@pve tkctl --privsep 1        # -> TK_LAB_PVE_TOKEN
-pveum user token add lab@pve tkctl-build --privsep 1  # -> TK_LAB_PVE_BUILD_TOKEN
+pveum user token add lab@pve tklab --privsep 1        # -> TK_LAB_PVE_TOKEN
+pveum user token add lab@pve tklab-build --privsep 1  # -> TK_LAB_PVE_BUILD_TOKEN
 grant() {{  # path role token: the user and the privilege-separated token both need the ACL
   pveum acl modify "$1" --users lab@pve --roles "$2"
   pveum acl modify "$1" --tokens "$3" --roles "$2"

@@ -60,7 +60,7 @@ memory = 32768
 
 1. **設定檔** `$XDG_CONFIG_HOME/tklab/config.toml`（預設 `~/.config/tklab/config.toml`）。三種給值方式擇一：什麼都不給就進**互動式**（會先登入 PVE，只列出能放 images、snippets、import 的共用儲存與實際存在的 bridge、節點讓你選；Debian 映像的 sha512 自動抓）；**參數**（`--pve-url`、`--storage`、`--guacamole-url` 必填，其餘有預設）；或 **`-f FILE`** 用預先寫好的檔案。
 2. **PVE**：建七個角色、使用者 `lab@pve`、pool、兩個 token、ACL，並把 PVE 的 CA 抓到 `pve-root-ca.pem` 給設定檔的 `ca_file`。需要管理員：互動式會隱藏輸入密碼，非互動式從 `TK_LAB_PVE_ADMIN_PASSWORD` 讀（帳號用 `--pve-admin`，預設 `root@pam`）。
-3. **Guacamole**：建服務帳號 `tkctl-lab`、只給三個權限、有 TOTP 就幫它註冊。管理員密碼從隱藏輸入或 `TK_LAB_GUAC_ADMIN_PASSWORD` 讀（帳號 `--guacamole-admin`，預設 `guacadmin`）。
+3. **Guacamole**：建服務帳號 `tklab`、只給三個權限、有 TOTP 就幫它註冊。管理員密碼從隱藏輸入或 `TK_LAB_GUAC_ADMIN_PASSWORD` 讀（帳號 `--guacamole-admin`，預設 `guacadmin`）。
 
 管理員密碼只在當下使用，不寫檔、不進 log。產生的 secret（兩個 PVE token、Guacamole 密碼與 TOTP secret）寫在 `$XDG_CONFIG_HOME/tklab/secrets.env`（0600）；同名環境變數有設會優先。
 
@@ -70,7 +70,7 @@ memory = 32768
 
 ## 權限
 
-PVE：專用使用者 `lab@pve` 與兩個 token。開班用的 token 只能 clone 範本、管理 `lab` 資源池內的 VM、在一個儲存上配置空間、使用一個 bridge；建範本用的 token 才能寫映像、引用 snippets（PVE 要求 `Datastore.Allocate`，這個權限也能刪該儲存上的 volume，所以範本建好後建議 `pveum user token remove lab@pve tkctl-build`，要重建再開）與讓節點抓網址。`/`、`/vms`、`/nodes` 上什麼都不給，所以碰不到 pool 外的 VM；`tklab init` 直接建立，`--manual` 可印出等價的 `pveum` 指令。`node = "auto"` 會把 VM 輪流放到線上的節點（token 看不到節點記憶體，看得到時會優先放最空的）。需要 PVE 8 以上（`VM.GuestAgent.Audit`）、Guacamole 1.5 以上。Guacamole：專用帳號只有 `CREATE_USER`、`CREATE_CONNECTION` 與 `CREATE_CONNECTION_GROUP`；它建出來的物件由它自己管理，碰不到別人的。學員在自己的 VM 裡有 sudo，VM 之間是硬體隔離。
+PVE：專用使用者 `lab@pve` 與兩個 token。開班用的 token 只能 clone 範本、管理 `lab` 資源池內的 VM、在一個儲存上配置空間、使用一個 bridge；建範本用的 token 才能寫映像、引用 snippets（PVE 要求 `Datastore.Allocate`，這個權限也能刪該儲存上的 volume，所以範本建好後建議 `pveum user token remove lab@pve tklab-build`，要重建再開）與讓節點抓網址。`/`、`/vms`、`/nodes` 上什麼都不給，所以碰不到 pool 外的 VM；`tklab init` 直接建立，`--manual` 可印出等價的 `pveum` 指令。`node = "auto"` 會把 VM 輪流放到線上的節點（token 看不到節點記憶體，看得到時會優先放最空的）。需要 PVE 8 以上（`VM.GuestAgent.Audit`）、Guacamole 1.5 以上。Guacamole：專用帳號只有 `CREATE_USER`、`CREATE_CONNECTION` 與 `CREATE_CONNECTION_GROUP`；它建出來的物件由它自己管理，碰不到別人的。學員在自己的 VM 裡有 sudo，VM 之間是硬體隔離。
 
 ## 授權
 

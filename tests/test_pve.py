@@ -44,7 +44,7 @@ def opener_with(routes):
 
 def client(routes):
     op = opener_with(routes)
-    c = pve.Pve("https://pve:8006", "lab@pve!tkctl", "SECRET", opener=op, sleep=lambda s: None)
+    c = pve.Pve("https://pve:8006", "lab@pve!tklab", "SECRET", opener=op, sleep=lambda s: None)
     return c, op
 
 
@@ -56,7 +56,7 @@ def test_auth_header_and_form_body():
     c, op = client({("POST", "/nodes/n1/qemu/3900/clone"): "UPID:x"})
     assert c.clone("n1", 3900, 3101, "lab-x-01", "lab", "n2") == "UPID:x"
     ((_key, body, headers),) = op.calls
-    assert headers["Authorization"] == "PVEAPIToken=lab@pve!tkctl=SECRET"
+    assert headers["Authorization"] == "PVEAPIToken=lab@pve!tklab=SECRET"
     # secrets never appear in the string form of the client or its errors
     assert "SECRET" not in repr(c)
     assert body == "newid=3101&name=lab-x-01&pool=lab&full=0&target=n2"
@@ -121,7 +121,7 @@ def test_next_vmid_confirms_with_cluster_nextid_and_honours_exclude():
 
 def test_wait_task_polls_the_node_in_the_upid_and_accepts_warnings():
     seq = iter([{"status": "running"}, {"status": "stopped", "exitstatus": "OK"}])
-    upid = "UPID:n1:0001:0002:0003:qmclone:3101:lab@pve!tkctl:"
+    upid = "UPID:n1:0001:0002:0003:qmclone:3101:lab@pve!tklab:"
     quoted = upid.replace(":", "%3A").replace("!", "%21").replace("@", "%40")
     path = f"/nodes/n1/tasks/{quoted}/status"
     c, op = client({("GET", path): lambda req: next(seq)})
@@ -253,13 +253,13 @@ TICKET = {
 def test_ticket_login_sets_cookie_and_csrf_on_writes():
     c, op = admin(TICKET | {("GET", "/access/roles"): [], ("POST", "/access/roles"): None})
     assert c.roles() == {}
-    c.role_add("TkctlLabX", ["VM.Audit", "VM.Clone"])
+    c.role_add("TklabX", ["VM.Audit", "VM.Clone"])
     (_, login_body, _), (_, _, get_h), (_, post_body, post_h) = op.calls
     assert login_body == "username=root%40pam&password=hunter2"
     assert get_h["Cookie"] == "PVEAuthCookie=PVE:root@pam:ABC"
     assert "Csrfpreventiontoken" not in get_h
     assert post_h["Csrfpreventiontoken"] == "CSRF:1"
-    assert post_body == "roleid=TkctlLabX&privs=VM.Audit%2CVM.Clone"
+    assert post_body == "roleid=TklabX&privs=VM.Audit%2CVM.Clone"
 
 
 def test_ticket_login_reports_tfa():
@@ -278,18 +278,18 @@ def test_ticket_login_reports_tfa():
 def test_admin_inventory_shapes():
     routes = TICKET | {
         ("GET", "/access/roles"): [
-            {"roleid": "TkctlLabA", "privs": "VM.Audit,VM.Clone"},
+            {"roleid": "TklabA", "privs": "VM.Audit,VM.Clone"},
             {"roleid": "Administrator", "privs": "", "special": 1},
         ],
         ("GET", "/access/users"): [{"userid": "root@pam"}, {"userid": "lab@pve"}],
         ("GET", "/pools"): [{"poolid": "lab"}],
-        ("GET", "/access/users/lab@pve/token"): [{"tokenid": "tkctl"}],
+        ("GET", "/access/users/lab@pve/token"): [{"tokenid": "tklab"}],
         ("GET", "/access/acl"): [
             {
                 "path": "/pool/lab",
-                "roleid": "TkctlLabClass",
+                "roleid": "TklabClass",
                 "type": "token",
-                "ugid": "lab@pve!tkctl",
+                "ugid": "lab@pve!tklab",
                 "propagate": 1,
             }
         ],
@@ -316,10 +316,10 @@ def test_admin_inventory_shapes():
         ),
     }
     c, _ = admin(routes)
-    assert c.roles() == {"TkctlLabA": {"VM.Audit", "VM.Clone"}, "Administrator": set()}
+    assert c.roles() == {"TklabA": {"VM.Audit", "VM.Clone"}, "Administrator": set()}
     assert c.users() == {"root@pam", "lab@pve"} and c.pools() == {"lab"}
-    assert c.tokens("lab@pve") == {"tkctl"}
-    assert c.acl()[0]["ugid"] == "lab@pve!tkctl"
+    assert c.tokens("lab@pve") == {"tklab"}
+    assert c.acl()[0]["ugid"] == "lab@pve!tklab"
     assert c.storages()[0]["storage"] == "nas-nfs"
     assert c.bridges("n1") == ["vmbr0"] and c.nodes() == ["n1", "n2"]
     assert c.ca_pem("n1").startswith("-----BEGIN CERTIFICATE-----")
@@ -328,32 +328,32 @@ def test_admin_inventory_shapes():
 
 def test_admin_writes_shapes():
     routes = TICKET | {
-        ("PUT", "/access/roles/TkctlLabA"): None,
+        ("PUT", "/access/roles/TklabA"): None,
         ("POST", "/access/users"): None,
         ("POST", "/pools"): None,
-        ("POST", "/access/users/lab@pve/token/tkctl"): {
-            "full-tokenid": "lab@pve!tkctl",
+        ("POST", "/access/users/lab@pve/token/tklab"): {
+            "full-tokenid": "lab@pve!tklab",
             "value": "SECRET-1",
         },
         ("DELETE", "/access/users/lab@pve/token/old"): None,
         ("PUT", "/access/acl"): None,
     }
     c, op = admin(routes)
-    c.role_set("TkctlLabA", ["VM.Audit"])
+    c.role_set("TklabA", ["VM.Audit"])
     c.user_add("lab@pve", "tklab service account")
     c.pool_add("lab", "tklab classes")
-    assert c.token_add("lab@pve", "tkctl") == "SECRET-1"
+    assert c.token_add("lab@pve", "tklab") == "SECRET-1"
     c.token_remove("lab@pve", "old")
-    c.acl_add("/pool/lab", "TkctlLabClass", token="lab@pve!tkctl")
-    c.acl_add("/pool/lab", "TkctlLabClass", user="lab@pve")
+    c.acl_add("/pool/lab", "TklabClass", token="lab@pve!tklab")
+    c.acl_add("/pool/lab", "TklabClass", user="lab@pve")
     bodies = {k: b for (k, b, _) in op.calls}
-    assert bodies[("PUT", "/access/roles/TkctlLabA")] == "privs=VM.Audit"
+    assert bodies[("PUT", "/access/roles/TklabA")] == "privs=VM.Audit"
     assert bodies[("POST", "/access/users")] == "userid=lab%40pve&comment=tklab+service+account"
-    assert bodies[("POST", "/access/users/lab@pve/token/tkctl")] == "privsep=1"
+    assert bodies[("POST", "/access/users/lab@pve/token/tklab")] == "privsep=1"
     acl_bodies = [b for (k, b, _) in op.calls if k == ("PUT", "/access/acl")]
     assert acl_bodies == [
-        "path=%2Fpool%2Flab&roles=TkctlLabClass&propagate=1&tokens=lab%40pve%21tkctl",
-        "path=%2Fpool%2Flab&roles=TkctlLabClass&propagate=1&users=lab%40pve",
+        "path=%2Fpool%2Flab&roles=TklabClass&propagate=1&tokens=lab%40pve%21tklab",
+        "path=%2Fpool%2Flab&roles=TklabClass&propagate=1&users=lab%40pve",
     ]
 
 

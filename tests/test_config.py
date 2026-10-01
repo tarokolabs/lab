@@ -7,8 +7,8 @@ from tklab import config
 GOOD = """
 [pve]
 url = "https://pve-node1:8006"
-token_id = "lab@pve!tkctl"
-build_token_id = "lab@pve!tkctl-build"
+token_id = "lab@pve!tklab"
+build_token_id = "lab@pve!tklab-build"
 node = "pve-node7"
 pool = "lab"
 storage = "nas-nfs"
@@ -18,7 +18,7 @@ bridge = "vmbr0"
 
 [guacamole]
 url = "https://guac.example"
-username = "tkctl-lab"
+username = "tklab"
 
 [vm]
 cores = 8
@@ -103,8 +103,8 @@ def test_init_template_loads(tmp_path):
 def test_build_token_id_is_optional_and_read(tmp_path):
     p = tmp_path / "lab.toml"
     p.write_text(GOOD)
-    assert config.load(p).pve.build_token_id == "lab@pve!tkctl-build"
-    p.write_text(GOOD.replace('build_token_id = "lab@pve!tkctl-build"', ""))
+    assert config.load(p).pve.build_token_id == "lab@pve!tklab-build"
+    p.write_text(GOOD.replace('build_token_id = "lab@pve!tklab-build"', ""))
     assert config.load(p).pve.build_token_id is None
     with pytest.raises(config.ConfigError, match="TK_LAB_PVE_BUILD_TOKEN"):
         config.build_secret({})

@@ -80,8 +80,8 @@ INIT_TEMPLATE = """# tklab configuration. Secrets live in secrets.env next to th
 #   TK_LAB_GUAC_TOTP_SECRET the account's TOTP secret, only when Guacamole enforces TOTP
 [pve]
 url = "https://pve-node1:8006"
-token_id = "lab@pve!tkctl"      # user@realm!tokenid; `tklab init` creates it
-build_token_id = "lab@pve!tkctl-build"   # may write images and fetch URLs; used by create template
+token_id = "lab@pve!tklab"      # user@realm!tokenid; `tklab init` creates it
+build_token_id = "lab@pve!tklab-build"   # may write images and fetch URLs; used by create template
 node = "auto"                    # node for new VMs; "auto" spreads them over the online nodes
 # nodes = ["pve-node6", "pve-node7"]  # the nodes "auto" may pick; unset = all online nodes
 pool = "lab"                     # every VM this tool touches lives in this pool
@@ -96,7 +96,7 @@ bridge = "vmbr0"
 
 [guacamole]
 url = "https://guac.example"
-username = "tkctl-lab"           # may create users, connections and connection groups
+username = "tklab"               # may create users, connections and connection groups
 
 [vm]
 cores = 8

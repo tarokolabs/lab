@@ -7,8 +7,8 @@ and next_vmid never reserves anything.
 
 from __future__ import annotations
 
-from tkctl_lab.guac import GuacError
-from tkctl_lab.pve import PveError
+from tklab.guac import GuacError
+from tklab.pve import PveError
 
 
 class FakePve:

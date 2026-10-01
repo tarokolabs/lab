@@ -4,7 +4,7 @@ from io import BytesIO
 
 import pytest
 
-from tkctl_lab import guac
+from tklab import guac
 
 BASE = "https://guac/api"
 DS = "/session/data/postgresql"

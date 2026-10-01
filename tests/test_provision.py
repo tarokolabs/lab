@@ -2,9 +2,9 @@ from datetime import date
 
 import pytest
 
-from tkctl_lab import classdef, provision, roster
-from tkctl_lab.config import Config, GuacConfig, PveConfig, TemplateConfig, VmConfig
-from tkctl_lab.pve import PveError
+from tklab import classdef, provision, roster
+from tklab.config import Config, GuacConfig, PveConfig, TemplateConfig, VmConfig
+from tklab.pve import PveError
 
 from .fakes import FakeGuac, FakePve
 

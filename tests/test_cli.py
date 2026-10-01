@@ -2,8 +2,8 @@ import re
 
 import pytest
 
-from tkctl_lab import cli, config, setup
-from tkctl_lab.pve import PveError
+from tklab import cli, config, setup
+from tklab.pve import PveError
 
 from .fakes import FakeGuac, FakeGuacAdmin, FakePve, FakePveAdmin
 from .test_setup_config import SUMS, answers
@@ -144,7 +144,7 @@ def test_get_classes_groups_by_class(env, capsys):
 
 
 def test_pve_error_is_one_line_and_exit_1(env, capsys):
-    from tkctl_lab.pve import PveError
+    from tklab.pve import PveError
 
     class Broken(FakePve):
         def pool_vms(self, pool):
@@ -193,11 +193,11 @@ def test_missing_secret_is_named(env, monkeypatch, capsys):
 def test_missing_config_points_at_init(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     rc = cli.main(["get", "classes"], make_clients=lambda c, s: (FakePve(), FakeGuac()))
-    assert rc == 2 and "tkctl lab init" in capsys.readouterr().err
+    assert rc == 2 and "tklab init" in capsys.readouterr().err
 
 
 def test_progress_lines_flush_when_stdout_is_a_file():
-    # `nohup tkctl-lab create … > log` must show progress as it happens, not at exit
+    # `nohup tklab create … > log` must show progress as it happens, not at exit
     assert cli.log.keywords == {"flush": True}
 
 
@@ -231,12 +231,12 @@ def test_init_with_flags_does_all_three_and_writes_env(monkeypatch, capsys):
     assert config.config_path().exists() and config.load().pve.storage == "nas-nfs"
     assert "config: created" in out and "TkctlLabClass: created" in out
     assert "user tkctl-lab: created" in out
-    from tkctl_lab import envfile
+    from tklab import envfile
 
     e = envfile.read(envfile.path())
     assert set(e) >= {"TK_LAB_PVE_TOKEN", "TK_LAB_PVE_BUILD_TOKEN", "TK_LAB_GUAC_PASSWORD"}
     assert oct(envfile.path().stat().st_mode & 0o777) == "0o600"
-    assert "next: tkctl lab create template" in out
+    assert "next: tklab create template" in out
     assert "p" not in e.values() and "g" not in e.values()  # admin passwords never land here
     assert (config.config_path().parent / "pve-root-ca.pem").exists()
 
@@ -260,7 +260,7 @@ def test_init_interactive_when_nothing_is_given(capsys):
     text = ["https://p", "", "", "", "", "", "", "", "", "https://g", ""]
     rc, *_ = init([], text=text, secrets=["pve-pw", "guac-pw"])
     assert rc == 0 and config.load().guacamole.url == "https://g"
-    assert "next: tkctl lab create template" in capsys.readouterr().out
+    assert "next: tklab create template" in capsys.readouterr().out
 
 
 def test_init_pve_only_and_rerun_is_kept(monkeypatch, capsys):
@@ -353,7 +353,7 @@ def test_init_uses_the_well_known_ca_before_a_config_exists(capsys):
 def test_init_guacamole_totp_admin_message_does_not_point_at_the_service_secret(
     monkeypatch, capsys
 ):
-    from tkctl_lab.guac import GuacError
+    from tklab.guac import GuacError
 
     monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
     config.config_path().parent.mkdir(parents=True)

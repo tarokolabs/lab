@@ -1,5 +1,5 @@
-from tkctl_lab import setup
-from tkctl_lab.guac import GuacError
+from tklab import setup
+from tklab.guac import GuacError
 
 from .fakes import FakeGuacAdmin
 from .test_setup_pve import cfg

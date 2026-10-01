@@ -2,12 +2,12 @@ import os
 
 import pytest
 
-from tkctl_lab import envfile
+from tklab import envfile
 
 
 def test_path_follows_xdg(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    assert envfile.path() == tmp_path / "tkctl" / "lab.env"
+    assert envfile.path() == tmp_path / "tklab" / "secrets.env"
 
 
 def test_read_missing_is_empty(tmp_path):

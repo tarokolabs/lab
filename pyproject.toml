@@ -1,7 +1,7 @@
 [project]
-name = "tkctl-lab"
+name = "tklab"
 version = "0.1.0"
-description = "Per-student tk8s VMs on Proxmox VE with Guacamole access, as a tkctl plugin"
+description = "Per-student tk8s VMs on Proxmox VE with Guacamole access, for instructors"
 readme = "README.md"
 license = "GPL-2.0-or-later"
 authors = [{ name = "Josh Hsieh", email = "josh.hsieh@linux.com" }]
@@ -9,7 +9,7 @@ requires-python = ">=3.14"
 dependencies = []
 
 [project.scripts]
-tkctl-lab = "tkctl_lab.cli:main"
+tklab = "tklab.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]

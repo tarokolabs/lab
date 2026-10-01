@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from tkctl_lab import config
+from tklab import config
 
 GOOD = """
 [pve]
@@ -90,8 +90,8 @@ def test_secrets_missing_named(monkeypatch):
 def test_xdg_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "c"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "s"))
-    assert config.config_path() == tmp_path / "c" / "tkctl" / "lab.toml"
-    assert config.state_dir() == tmp_path / "s" / "tkctl" / "lab"
+    assert config.config_path() == tmp_path / "c" / "tklab" / "config.toml"
+    assert config.state_dir() == tmp_path / "s" / "tklab"
 
 
 def test_init_template_loads(tmp_path):
@@ -134,7 +134,7 @@ def test_guac_totp_secret_is_optional(monkeypatch):
 
 def test_secrets_fall_back_to_env_file(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    from tkctl_lab import envfile
+    from tklab import envfile
 
     envfile.write(
         envfile.path(),

@@ -5,7 +5,7 @@ from io import BytesIO
 
 import pytest
 
-from tkctl_lab import pve
+from tklab import pve
 
 BASE = "https://pve:8006/api2/json"
 
@@ -340,15 +340,15 @@ def test_admin_writes_shapes():
     }
     c, op = admin(routes)
     c.role_set("TkctlLabA", ["VM.Audit"])
-    c.user_add("lab@pve", "tkctl lab service account")
-    c.pool_add("lab", "tkctl lab classes")
+    c.user_add("lab@pve", "tklab service account")
+    c.pool_add("lab", "tklab classes")
     assert c.token_add("lab@pve", "tkctl") == "SECRET-1"
     c.token_remove("lab@pve", "old")
     c.acl_add("/pool/lab", "TkctlLabClass", token="lab@pve!tkctl")
     c.acl_add("/pool/lab", "TkctlLabClass", user="lab@pve")
     bodies = {k: b for (k, b, _) in op.calls}
     assert bodies[("PUT", "/access/roles/TkctlLabA")] == "privs=VM.Audit"
-    assert bodies[("POST", "/access/users")] == "userid=lab%40pve&comment=tkctl+lab+service+account"
+    assert bodies[("POST", "/access/users")] == "userid=lab%40pve&comment=tklab+service+account"
     assert bodies[("POST", "/access/users/lab@pve/token/tkctl")] == "privsep=1"
     acl_bodies = [b for (k, b, _) in op.calls if k == ("PUT", "/access/acl")]
     assert acl_bodies == [

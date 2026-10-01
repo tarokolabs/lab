@@ -1,5 +1,5 @@
-from tkctl_lab import template
-from tkctl_lab.config import Config, GuacConfig, PveConfig, TemplateConfig, VmConfig
+from tklab import template
+from tklab.config import Config, GuacConfig, PveConfig, TemplateConfig, VmConfig
 
 from .fakes import FakePve
 
@@ -21,7 +21,7 @@ def test_user_data_installs_desktop_tk8s_and_prepulls_image():
     assert f"condition: test -f {template.BUILD_OK}" in ud
     assert "cloud-init clean --logs --machine-id" in ud
     # a fresh cloud image boots with ip_forward=0 and node netns inherit that at creation
-    assert "net.ipv4.ip_forward = 1" in ud and "/etc/sysctl.d/80-tkctl-lab.conf" in ud
+    assert "net.ipv4.ip_forward = 1" in ud and "/etc/sysctl.d/80-tklab.conf" in ud
     assert "systemctl disable lightdm" in ud
 
 
@@ -42,7 +42,7 @@ def test_build_needs_snippet_on_storage_first(tmp_path, monkeypatch, capsys):
     lines = []
     rc = template.build(cfg(), pve, k8s=None, node=None, log=lines.append)
     assert rc == 1
-    written = tmp_path / "tkctl" / "lab" / template.SNIPPET
+    written = tmp_path / "tklab" / template.SNIPPET
     assert written.read_text().startswith("#cloud-config")
     joined = "\n".join(lines)
     assert str(written) in joined and "/mnt/pve/nas-nfs/snippets/" in joined
@@ -143,7 +143,7 @@ def test_build_sequence():
     assert kv["agent"] == 1 and kv["ide2"] == "nas-nfs:cloudinit" and kv["ciupgrade"] == 0
     assert "import-from=nas-nfs:import/debian-13-genericcloud-amd64.qcow2" in kv["scsi0"]
     assert "format=qcow2" in kv["scsi0"]  # linked clones on NFS need qcow2; the API default is raw
-    assert kv["cicustom"] == "user=nas-nfs:snippets/tkctl-lab-template.yaml"
+    assert kv["cicustom"] == "user=nas-nfs:snippets/tklab-template.yaml"
     assert kv["net0"] == "virtio,bridge=vmbr0" and kv["cpu"] == "x86-64-v2-AES"
     # the template stays small (its content is ~5 GB); clones grow to the class size later,
     # so full clones and migrations move 12 GB, not the 60 GB a student VM ends up with
@@ -188,7 +188,7 @@ def test_build_needs_k8s_version():
 
 
 def test_build_403_points_at_init_pve():
-    from tkctl_lab.pve import PveError
+    from tklab.pve import PveError
 
     pve = FakePve(snippets=[template.SNIPPET], imports=["debian-13-genericcloud-amd64.qcow2"])
 
@@ -199,4 +199,4 @@ def test_build_403_points_at_init_pve():
     lines = []
     template.build(cfg(), pve, k8s=None, node=None, log=lines.append)
     text = "\n".join(lines)
-    assert "tkctl lab init pve" in text and "grant /vms/3900" not in text
+    assert "tklab init pve" in text and "grant /vms/3900" not in text

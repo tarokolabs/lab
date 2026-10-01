@@ -1,7 +1,7 @@
 import pytest
 
-from tkctl_lab import config, prompt, setup
-from tkctl_lab.pve import PveError
+from tklab import config, prompt, setup
+from tklab.pve import PveError
 
 from .fakes import FakePveAdmin
 
@@ -58,7 +58,7 @@ def test_render_config_loads_and_points_ca_file_into_the_config_dir(tmp_path, mo
         "nas-nfs",
     )
     assert c.pve.vmid_range == (3100, 3199)
-    assert c.pve.ca_file == str(tmp_path / "tkctl" / "pve-root-ca.pem")
+    assert c.pve.ca_file == str(tmp_path / "tklab" / "pve-root-ca.pem")
     assert c.template.image_sha512 == "abc123" and c.guacamole.url == "https://guac"
     assert "root@pam" not in text and "guacadmin" not in text  # admin identities never land here
 
@@ -185,7 +185,7 @@ def test_prompt_retries_pve_login_and_asks_totp_when_challenged():
 
 
 def test_interactive_asks_totp_when_challenged_by_guacamole():
-    from tkctl_lab.guac import GuacError
+    from tklab.guac import GuacError
 
     tries = []
 
@@ -241,7 +241,7 @@ def test_prompt_aborts_on_non_auth_pve_errors():
 
 
 def test_prompt_aborts_on_non_auth_guacamole_errors():
-    from tkctl_lab.guac import GuacError
+    from tklab.guac import GuacError
 
     def guac_login(url, user, pw, totp):
         raise GuacError(0, "POST /tokens: Connection refused")

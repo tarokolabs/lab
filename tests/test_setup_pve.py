@@ -1,5 +1,5 @@
-from tkctl_lab import setup
-from tkctl_lab.config import Config, GuacConfig, PveConfig, TemplateConfig, VmConfig
+from tklab import setup
+from tklab.config import Config, GuacConfig, PveConfig, TemplateConfig, VmConfig
 
 from .fakes import FakePveAdmin
 

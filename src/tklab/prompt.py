@@ -1,4 +1,4 @@
-"""Interactive questions for `tkctl lab init`; input and secrets are injected for tests."""
+"""Interactive questions for `tklab init`; input and secrets are injected for tests."""
 
 from __future__ import annotations
 

@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from tkctl_lab import classdef
-from tkctl_lab.config import VmConfig
+from tklab import classdef
+from tklab.config import VmConfig
 
 VM = VmConfig()
 

@@ -1,4 +1,4 @@
-"""tkctl-lab: the tkctl plugin that provisions per-student VMs on PVE with Guacamole access."""
+"""tklab: provisions per-student tk8s VMs on Proxmox VE with Guacamole access."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _build_client(cfg: config.Config, token: str):
 
 
 def _fail(msg: str, rc: int = 2) -> int:
-    print(f"tkctl lab: {msg}", file=sys.stderr)
+    print(f"tklab: {msg}", file=sys.stderr)
     return rc
 
 
@@ -62,7 +62,7 @@ def _print_roster(entries: list[roster.Entry]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="tkctl lab",
+        prog="tklab",
         description="Per-student tk8s VMs on Proxmox VE with Guacamole access.",
     )
     p.add_argument("--version", action="version", version=__version__)
@@ -153,7 +153,7 @@ def _report(section: str, results: list[tuple[str, str]]) -> None:
 
 
 class _Init:
-    """One `tkctl lab init` run: config, then PVE, then Guacamole, with injectable dependencies."""
+    """One `tklab init` run: config, then PVE, then Guacamole, with injectable dependencies."""
 
     def __init__(self, args, deps: dict):
         self.args = args
@@ -243,7 +243,7 @@ class _Init:
             rc = self.guacamole(cfg, flags, env)
             if rc:
                 return rc
-        print("next: tkctl lab create template")
+        print("next: tklab create template")
         return 0
 
     def pve(self, cfg, flags, env) -> int:
@@ -260,7 +260,7 @@ class _Init:
                     )
                 else:
                     return _fail(
-                        "set TK_LAB_PVE_ADMIN_PASSWORD (or run `tkctl lab init` on a terminal)"
+                        "set TK_LAB_PVE_ADMIN_PASSWORD (or run `tklab init` on a terminal)"
                     )
             except PveError as e:
                 return _fail(f"pve: {e}", 1)
@@ -288,13 +288,13 @@ class _Init:
                     )
                 else:
                     return _fail(
-                        "set TK_LAB_GUAC_ADMIN_PASSWORD (or run `tkctl lab init` on a terminal)"
+                        "set TK_LAB_GUAC_ADMIN_PASSWORD (or run `tklab init` on a terminal)"
                     )
             except GuacError as e:
                 if guacmod.challenge(e) is not None:
                     return _fail(
                         f"guacamole: administrator {user} needs a TOTP code; "
-                        "run `tkctl lab init` interactively or use --manual",
+                        "run `tklab init` interactively or use --manual",
                         1,
                     )
                 return _fail(f"guacamole: {e}", 1)
@@ -388,7 +388,7 @@ def _delete_class(args, cfg, pve, guac) -> int:
     if args.expired:
         names = provision.expired(cfg, pve, date.today())
         if not names:
-            print("tkctl lab: nothing to delete", file=sys.stderr)
+            print("tklab: nothing to delete", file=sys.stderr)
             return 0
     elif args.name:
         names = [args.name]

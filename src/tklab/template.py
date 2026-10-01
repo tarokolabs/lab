@@ -13,9 +13,9 @@ from . import config
 from .config import Config
 from .pve import PveError
 
-SNIPPET = "tkctl-lab-template.yaml"
-VM_NAME = "tkctl-lab-template"
-BUILD_OK = "/var/lib/tkctl-lab/build-ok"
+SNIPPET = "tklab-template.yaml"
+VM_NAME = "tklab-template"
+BUILD_OK = "/var/lib/tklab/build-ok"
 IMPORT_TIMEOUT = 1800
 FIRST_BOOT_TIMEOUT = 2400
 
@@ -23,7 +23,7 @@ FIRST_BOOT_TIMEOUT = 2400
 def user_data(tk8s_version: str, k8s: str) -> str:
     raw = f"https://raw.githubusercontent.com/tarokolabs/tk8s/{tk8s_version}/install.sh"
     return f"""#cloud-config
-# tkctl lab template: tk8s preinstalled, node image pre-pulled, XFCE desktop over xrdp.
+# tklab template: tk8s preinstalled, node image pre-pulled, XFCE desktop over xrdp.
 # The student user gets its password per clone (PVE cloud-init cipassword).
 package_update: true
 package_upgrade: true
@@ -48,7 +48,7 @@ users:
 write_files:
   - path: /etc/ssh/sshd_config.d/00-lab.conf
     content: "PasswordAuthentication yes\\n"
-  - path: /etc/sysctl.d/80-tkctl-lab.conf
+  - path: /etc/sysctl.d/80-tklab.conf
     # node network namespaces copy the host's IPv4 forwarding flag when they are created,
     # and a fresh cloud image boots with it off; kubeadm's preflight then fails inside the node
     content: "net.ipv4.ip_forward = 1\\n"
@@ -56,7 +56,7 @@ write_files:
     owner: student:student
     defer: true
     content: "xfce4-session\\n"
-  - path: /usr/local/sbin/tkctl-lab-build
+  - path: /usr/local/sbin/tklab-build
     permissions: "0755"
     content: |
       #!/bin/sh
@@ -70,11 +70,11 @@ write_files:
       curl -fsSL -o /tmp/install.sh {raw}
       su - student -c "TK_VERSION={tk8s_version} sh /tmp/install.sh"
       podman pull ghcr.io/tarokolabs/tk8s/node:v{k8s}
-      install -d /var/lib/tkctl-lab
+      install -d /var/lib/tklab
       touch {BUILD_OK}
       cloud-init clean --logs --machine-id
 runcmd:
-  - /usr/local/sbin/tkctl-lab-build
+  - /usr/local/sbin/tklab-build
 power_state:
   mode: poweroff
   timeout: 60
@@ -117,7 +117,7 @@ def build(cfg: Config, pve, *, k8s: str | None, node: str | None, log=print) -> 
             log(f"wrote {local}")
             log("PVE cannot receive snippets over the API; copy it onto the storage once, e.g.")
             log(f"  scp {local} root@<pve-node>:/mnt/pve/{storage}/snippets/")
-            log("then run `tkctl lab create template` again")
+            log("then run `tklab create template` again")
             return 1
 
     if _has(pve, node, storage, "import", image):
@@ -164,7 +164,7 @@ def build(cfg: Config, pve, *, k8s: str | None, node: str | None, log=print) -> 
             log(f"{e}")
             log(
                 f"PVE removed the ACLs on /vms/{vmid} when the old template was deleted; "
-                "run `tkctl lab init pve` to put them back, then build again"
+                "run `tklab init pve` to put them back, then build again"
             )
             return 1
         raise

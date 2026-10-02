@@ -27,6 +27,8 @@ class FakePve:
         snippets=(),
         imports=(),
         avail=None,
+        k8s_exit_for=None,
+        k8s_hold=None,
     ):
         self.used = set(used)
         self.hidden = set(hidden)
@@ -40,6 +42,11 @@ class FakePve:
         self.snippets = list(snippets)
         self.imports = list(imports)
         self.avail = dict(avail or {})  # (node, storage) -> free bytes
+        self.k8s_exit_for = dict(k8s_exit_for or {})  # vm name -> exit code (default 0)
+        self.k8s_hold = k8s_hold  # threading.Event: commands stay running until it is set
+        self._execs: dict[int, dict] = {}
+        self.inflight: dict[str, int] = {}
+        self.max_inflight: dict[str, int] = {}
         self.vms: dict[int, dict] = {}
         self.calls: list[tuple] = []
         self.deleted: list[int] = []
@@ -141,6 +148,24 @@ class FakePve:
         self.deleted.append(vmid)
         del self.vms[vmid]
         return f"UPID:{node}:del-{vmid}"
+
+    def agent_exec(self, node, vmid, command):
+        self.calls.append(("exec", vmid, command))
+        pid = 1000 + len(self._execs)
+        self._execs[pid] = {"vmid": vmid, "node": node}
+        self.inflight[node] = self.inflight.get(node, 0) + 1
+        self.max_inflight[node] = max(self.max_inflight.get(node, 0), self.inflight[node])
+        return pid
+
+    def agent_exec_status(self, node, vmid, pid):
+        x = self._execs[pid]
+        if self.k8s_hold is not None and not self.k8s_hold.is_set():
+            return {"exited": 0}
+        if not x.get("done"):
+            x["done"] = True
+            self.inflight[node] -= 1
+        name = self.vms[vmid]["name"]
+        return {"exited": 1, "exitcode": self.k8s_exit_for.get(name, 0)}
 
     def agent_ipv4(self, node, vmid, timeout=300):
         name = self.vms[vmid]["name"]

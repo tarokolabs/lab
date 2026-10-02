@@ -61,7 +61,7 @@ memory = 32768
 
 `tklab init` 依序做三件事，每一件都可以重跑（存在就補齊或略過）：
 
-1. **設定檔** `$XDG_CONFIG_HOME/tklab/config.toml`（預設 `~/.config/tklab/config.toml`）。三種給值方式擇一：什麼都不給就進**互動式**（會先登入 PVE，只列出能放 images、snippets、import 的共用儲存與實際存在的 bridge、節點讓你選；Debian 映像的 sha512 自動抓）；**參數**（`--pve-url`、`--storage`、`--guacamole-url` 必填，其餘有預設）；或 **`-f FILE`** 用預先寫好的檔案。
+1. **設定檔** `$XDG_CONFIG_HOME/tklab/config.toml`（預設 `~/.config/tklab/config.toml`）。三種給值方式擇一：什麼都不給就進**互動式**（會先登入 PVE，只列出能放 images、snippets、import 的共用儲存與實際存在的 bridge、節點讓你選；Debian 映像的 sha512 自動抓）；**參數**（`--pve-url`、`--storage`、`--guacamole-url` 必填，其餘有預設）；或 **`-f FILE`** 用預先寫好的檔案（原樣複製，所以檔案本身要填好 `template.image_sha512`；互動式與參數模式會自動抓）。
 2. **PVE**：建七個角色、使用者 `lab@pve`、pool、兩個 token、ACL，並把 PVE 的 CA 抓到 `pve-root-ca.pem` 給設定檔的 `ca_file`。需要管理員：互動式會隱藏輸入密碼，非互動式從 `TK_LAB_PVE_ADMIN_PASSWORD` 讀（帳號用 `--pve-admin`，預設 `root@pam`）。
 3. **Guacamole**：建服務帳號 `tklab`、只給三個權限、有 TOTP 就幫它註冊。管理員密碼從隱藏輸入或 `TK_LAB_GUAC_ADMIN_PASSWORD` 讀（帳號 `--guacamole-admin`，預設 `guacadmin`）。
 

@@ -104,6 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--node", help="PVE node for every VM (default: pve.node from the config)")
     c.add_argument("--cores", type=int)
     c.add_argument("--memory", type=int, help="MiB")
+    c.add_argument("--k8s", action="store_true", help="also create a tk8s cluster inside every VM")
     c.add_argument("--parallel", type=int, default=5, help="students provisioned at once")
     t = create_nouns.add_parser("template", help="build the node template from the cloud image")
     t.add_argument("--k8s", help="Kubernetes version of the node image to pre-pull")
@@ -324,6 +325,8 @@ def _create_class(args, cfg, pve, guac) -> int:
         for k in ("students", "expires", "node", "cores", "memory")
         if getattr(args, k) is not None
     ]
+    if args.k8s:
+        topo.append("k8s")
     try:
         if args.file:
             if topo or args.name:
@@ -340,6 +343,7 @@ def _create_class(args, cfg, pve, guac) -> int:
                 node=args.node,
                 cores=args.cores,
                 memory=args.memory,
+                k8s=args.k8s,
             )
     except classdef.ClassDefError as e:
         return _fail(str(e))

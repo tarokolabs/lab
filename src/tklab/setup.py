@@ -269,27 +269,40 @@ def _secret_works(client) -> bool:
 
 
 def reconcile_guacamole(
-    cfg: Config, admin, env: dict[str, str], *, make_client
+    cfg: Config, admin, env: dict[str, str], *, make_client, on_secret=None
 ) -> tuple[list[Result], dict[str, str]]:
     """Bring the Guacamole service account to the state the tool needs; returns new secrets.
 
     make_client(username, password, totp_secret) builds a client that logs in as the service
-    account; it is how the TOTP state is discovered and enrolled.
+    account; it is how the TOTP state is discovered and enrolled. on_secret(dict) gets each
+    new secret as soon as it exists on the server. The admin session is closed either way.
     """
+    try:
+        return _reconcile_guacamole(cfg, admin, env, make_client, on_secret)
+    finally:
+        admin.logout()
+
+
+def _reconcile_guacamole(cfg, admin, env, make_client, on_secret):
     results: list[Result] = []
     new_env: dict[str, str] = {}
     user = cfg.guacamole.username
     password = env.get("TK_LAB_GUAC_PASSWORD", "")
 
+    def issued(key: str, value: str) -> None:
+        new_env[key] = value
+        if on_secret is not None:
+            on_secret({key: value})
+
     if admin.get_user(user) is None:
         password = new_password()
         admin.create_user(user, password)
-        new_env["TK_LAB_GUAC_PASSWORD"] = password
+        issued("TK_LAB_GUAC_PASSWORD", password)
         results.append((f"user {user}", "created"))
     elif not password:
         password = new_password()
         admin.set_password(user, password)
-        new_env["TK_LAB_GUAC_PASSWORD"] = password
+        issued("TK_LAB_GUAC_PASSWORD", password)
         results.append((f"user {user}", "updated"))
     else:
         results.append((f"user {user}", "kept"))
@@ -315,13 +328,13 @@ def reconcile_guacamole(
         # The password we hold no longer opens the account: it is ours, so rotate it.
         password = new_password()
         admin.set_password(user, password)
-        new_env["TK_LAB_GUAC_PASSWORD"] = password
+        issued("TK_LAB_GUAC_PASSWORD", password)
         slot = next(i for i, (item, _) in enumerate(results) if item == f"user {user}")
         results[slot] = (f"user {user}", "updated")
         state, offered = _totp_state(make_client(user, password, None))
     if state == "none":
         if secret:
-            new_env["TK_LAB_GUAC_TOTP_SECRET"] = ""
+            issued("TK_LAB_GUAC_TOTP_SECRET", "")
             results.append(("totp", "removed"))
         else:
             results.append(("totp", "kept"))
@@ -340,9 +353,8 @@ def reconcile_guacamole(
                     )
             assert offered
             make_client(user, password, offered).enrol(guacmod.totp(offered))
-            new_env["TK_LAB_GUAC_TOTP_SECRET"] = offered
+            issued("TK_LAB_GUAC_TOTP_SECRET", offered)
             results.append(("totp", "updated" if (secret or cleared) else "created"))
-    admin.logout()
     return results, new_env
 
 

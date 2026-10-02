@@ -480,14 +480,18 @@ def test_init_keeps_secrets_issued_before_a_later_pve_failure(monkeypatch, capsy
 def test_init_replaces_a_kept_token_that_pve_rejects(monkeypatch, capsys):
     monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
     monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
-    monkeypatch.setenv("TK_LAB_PVE_TOKEN", "stale")
+    from tklab import envfile
+
+    envfile.write(envfile.path(), {"TK_LAB_PVE_TOKEN": "stale", "TK_LAB_PVE_BUILD_TOKEN": "fine"})
     pve_admin = FakePveAdmin(
         users=["lab@pve"], tokens={"lab@pve": {"tklab", "tklab-build"}}, nodes=["n1"]
     )
     rc, *_ = init([*FLAGS, "--node", "n1"], pve_admin=pve_admin)
     out = capsys.readouterr().out
     assert rc == 0 and "token lab@pve!tklab: updated" in out
+    assert "token lab@pve!tklab-build: kept" in out
     assert ("token_remove", "lab@pve", "tklab") in pve_admin.calls
+    assert envfile.read(envfile.path())["TK_LAB_PVE_TOKEN"] != "stale"
 
 
 def test_init_logs_the_guacamole_admin_in_for_real(monkeypatch, capsys):
@@ -495,3 +499,35 @@ def test_init_logs_the_guacamole_admin_in_for_real(monkeypatch, capsys):
     monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
     rc, _, guac_admin = init([*FLAGS, "--node", "n1"])
     assert rc == 0 and guac_admin.calls[0] == ("login", None)
+
+
+def test_init_without_an_online_node_is_a_clean_error(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    rc, *_ = init([*FLAGS, "--node", "n1"], pve_admin=FakePveAdmin(nodes=[]))
+    assert rc == 2 and "no online PVE node" in capsys.readouterr().err
+
+
+def test_init_names_a_stale_token_exported_by_the_shell_instead_of_rotating(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    monkeypatch.setenv("TK_LAB_PVE_TOKEN", "stale")
+    pve_admin = FakePveAdmin(
+        users=["lab@pve"], tokens={"lab@pve": {"tklab", "tklab-build"}}, nodes=["n1"]
+    )
+    rc, *_ = init([*FLAGS, "--node", "n1"], pve_admin=pve_admin)
+    err = capsys.readouterr().err
+    assert rc == 2 and "TK_LAB_PVE_TOKEN is set in the environment" in err
+    assert not any(c[0] == "token_remove" for c in pve_admin.calls)
+
+
+def test_init_rerun_keeps_tokens_whose_file_secrets_still_work(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
+    rc, pve_admin, guac_admin = init([*FLAGS, "--node", "n1"])
+    assert rc == 0
+    capsys.readouterr()
+    pve_admin.calls.clear()
+    rc, *_ = init(["pve"], pve_admin=pve_admin, guac_admin=guac_admin)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "token lab@pve!tklab: kept" in out and "token lab@pve!tklab-build: kept" in out
+    assert not any(c[0] in ("token_add", "token_remove") for c in pve_admin.calls)

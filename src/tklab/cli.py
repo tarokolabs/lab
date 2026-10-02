@@ -293,11 +293,15 @@ class _Init:
                 token_works=setup.pve_token_works(
                     cfg, ca_file=self.ca_file, make_client=self.make_token_client
                 ),
+                exported=frozenset(k for k in envfile.KEYS if k in os.environ),
             )
         except PveError as e:
             hint = f" (needs {PVE_ADMIN_PRIVS}; or use --manual)" if e.status == 403 else ""
             self._announce(before)
             return _fail(f"pve: {e}{hint}", 1)
+        except setup.SetupError as e:
+            self._announce(before)
+            return _fail(f"pve: {e}")
         _report("pve", results)
         self._announce(before)
         return 0

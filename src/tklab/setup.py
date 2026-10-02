@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import secrets as _secrets
 import shutil
 import string
@@ -111,8 +112,10 @@ def pve_token_works(cfg: Config, *, ca_file: str | None, make_client=None):
             make_client(cfg.pve.url, f"{USER}!{tokenid}", secret, ca_file=ca_file).request(
                 "GET", "/version"
             )
-        except pvemod.PveError:
-            return False
+        except pvemod.PveError as e:
+            if e.status in (401, 403):
+                return False
+            raise  # unreachable or broken PVE says nothing about the secret
         return True
 
     return check
@@ -126,12 +129,16 @@ def reconcile_pve(
     ca_path: Path,
     on_secret=None,
     token_works=None,
+    exported: frozenset[str] = frozenset(),
 ) -> tuple[list[Result], dict[str, str]]:
     """Bring PVE to the state the config describes; returns what happened and new secrets.
 
     on_secret(dict) is called the moment a token is issued, so a failure later in the run
     cannot lose a secret PVE will never show again. token_works(tokenid, secret) decides
     whether a token already in env is kept; without it any present secret is trusted.
+    `exported` names the keys the shell environment supplies: a rejected secret there is an
+    error, not a reason to rotate, because the new secret would land in the file the
+    exported value keeps overriding.
     """
     results: list[Result] = []
     new_env: dict[str, str] = {}
@@ -167,9 +174,15 @@ def reconcile_pve(
         key = TOKEN_ENV[tokenid]
         label = f"token {USER}!{tokenid}"
         secret = env.get(key)
-        if tokenid in have and secret and (token_works is None or token_works(tokenid, secret)):
-            results.append((label, "kept"))
-            continue
+        if tokenid in have and secret:
+            if token_works is None or token_works(tokenid, secret):
+                results.append((label, "kept"))
+                continue
+            if key in exported:
+                raise SetupError(
+                    f"{key} is set in the environment but PVE rejects it; "
+                    f"unset it (secrets.env holds the tokens init issues) or fix it"
+                )
         if tokenid in have:
             # Its secret is gone (or wrong) for good; a new token is the only way back.
             admin.token_remove(USER, tokenid)
@@ -280,7 +293,8 @@ def reconcile_guacamole(
     try:
         return _reconcile_guacamole(cfg, admin, env, make_client, on_secret)
     finally:
-        admin.logout()
+        with contextlib.suppress(guacmod.GuacError):  # never mask the real failure
+            admin.logout()
 
 
 def _reconcile_guacamole(cfg, admin, env, make_client, on_secret):

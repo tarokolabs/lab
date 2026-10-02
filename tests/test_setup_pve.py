@@ -226,3 +226,42 @@ def test_pve_token_works_asks_version_with_the_token():
     check = setup.pve_token_works(cfg(), ca_file="/ca.pem", make_client=Client)
     assert check("tklab", "good") is True and check("tklab", "bad") is False
     assert seen[0] == ("https://pve", "lab@pve!tklab", "good", "/ca.pem")
+
+
+def test_pve_token_works_only_treats_a_rejection_as_a_bad_secret():
+    class Client:
+        def __init__(self, url, token_id, secret, *, ca_file=None):
+            self.secret = secret
+
+        def request(self, method, path, params=None):
+            if self.secret == "bad":
+                raise PveError(401, "invalid token")
+            if self.secret == "down":
+                raise PveError(0, "connection refused")
+            if self.secret == "proxy":
+                raise PveError(502, "bad gateway")
+            return {}
+
+    check = setup.pve_token_works(cfg(), ca_file=None, make_client=Client)
+    assert check("tklab", "bad") is False
+    for transient in ("down", "proxy"):
+        with pytest.raises(PveError):  # not a verdict on the secret: do not rotate on it
+            check("tklab", transient)
+
+
+def test_reconcile_pve_refuses_to_rotate_a_token_the_shell_exports(tmp_path):
+    # the new secret would go to secrets.env, which the exported variable keeps overriding
+    admin = FakePveAdmin(
+        users=["lab@pve"], tokens={"lab@pve": {"tklab", "tklab-build"}}, nodes=["n1"]
+    )
+    env = {"TK_LAB_PVE_TOKEN": "stale", "TK_LAB_PVE_BUILD_TOKEN": "fine"}
+    with pytest.raises(setup.SetupError, match="TK_LAB_PVE_TOKEN is set in the environment"):
+        setup.reconcile_pve(
+            cfg("n1"),
+            admin,
+            env,
+            ca_path=tmp_path / "ca.pem",
+            token_works=lambda t, s: s == "fine",
+            exported=frozenset({"TK_LAB_PVE_TOKEN"}),
+        )
+    assert not any(c[0] == "token_remove" for c in admin.calls)

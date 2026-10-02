@@ -56,11 +56,13 @@ def write(p: Path, values: dict[str, str]) -> None:
     # Write beside the file and rename over it: a crash midway never leaves a half-written
     # secrets file, and the previous one stays readable until the new one is complete.
     tmp = p.with_name(p.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp.unlink(missing_ok=True)  # never reuse a leftover (or planted) file and its mode
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(fd, "w") as f:
             f.write("\n".join(lines) + "\n")
-        os.chmod(tmp, 0o600)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, p)
     except BaseException:
         with contextlib.suppress(OSError):

@@ -66,3 +66,13 @@ def test_failed_write_leaves_the_previous_file_untouched(tmp_path, monkeypatch):
         envfile.write(p, {"TK_LAB_PVE_TOKEN": "new"})
     assert envfile.read(p) == {"TK_LAB_PVE_TOKEN": "old"}
     assert [x.name for x in tmp_path.iterdir()] == ["secrets.env"]  # no temp file left behind
+
+
+def test_write_replaces_a_planted_temp_file_and_ends_up_0600(tmp_path):
+    p = tmp_path / "secrets.env"
+    planted = tmp_path / "secrets.env.tmp"
+    planted.write_text("not ours\n")
+    planted.chmod(0o644)
+    envfile.write(p, {"TK_LAB_PVE_TOKEN": "new"})
+    assert envfile.read(p) == {"TK_LAB_PVE_TOKEN": "new"}
+    assert oct(p.stat().st_mode & 0o777) == "0o600" and not planted.exists()

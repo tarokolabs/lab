@@ -17,7 +17,7 @@ tklab create template  # 從 Debian cloud image 做範本，做一次
 ```
 tklab init [pve|guacamole] [--manual] [-f FILE] [--pve-url … --storage … --guacamole-url …]
 tklab create template [--k8s 1.37.0] [--node NAME]
-tklab create class <班名> --students N [--expires 2026-10-20] [--node NAME|auto] [--cores N] [--memory MiB]
+tklab create class <班名> --students N [--k8s] [--expires 2026-10-20] [--node NAME|auto] [--cores N] [--memory MiB]
 tklab create class -f k8s-101.toml
 tklab get classes
 tklab describe class <班名> [--roster] [-o toml]
@@ -30,6 +30,7 @@ tklab delete class --expired [--yes]
 ```toml
 name = "k8s-101"
 expires = 2026-10-20
+k8s = true
 students = ["alice", "bob", "carol"]
 
 [vm]
@@ -41,6 +42,8 @@ memory = 32768
 ```
 
 `describe class <班名> -o toml` 會把現有班級倒回這種格式，改個班名就能再開一班。
+
+`--k8s`（檔案裡 `k8s = true`）會在每台 VM 連上 Guacamole 之後，透過 qemu-guest-agent 以 `student` 身分執行 `tkctl create cluster tk8s && tkctl use cluster tk8s && tkctl verify cluster tk8s`，學員一登入就有一個驗證過的叢集，`~/.kube/config` 已指好。同一個 PVE 節點上同時最多建兩個叢集（更多會互搶拉 image 的頻寬而逾時），每個最多等 20 分鐘；VM 內的輸出在 `/var/log/tklab-k8s.log`。失敗只會記在名冊的 error 欄，VM 與帳號都留著，重跑同一道 `create class` 只會重做叢集那一步。VM 的 tag 多一個 `k8s`，`describe -o toml` 會把它寫回去。這一步需要開班用的角色有 `VM.GuestAgent.Unrestricted`（舊安裝重跑一次 `tklab init pve` 就會補上）。
 
 每位學員一台 `lab-<班名>-<學員>` 的 VM（tag `lab;class-<班名>;expires-<日期>`），Guacamole 一個帳號（有名字的學員用名字，編號的用 `<班名>-<編號>`）與兩條連線：`<班名>-<學員> SSH` 和 `<班名>-<學員> Desktop`。名冊（VMID、IP、Guacamole 帳密、VM 的 `student` 密碼、失敗原因）寫在 `$XDG_STATE_HOME/tklab/<班名>.csv`（預設 `~/.local/state/…`），權限 0600，`describe class --roster` 會印出來。
 

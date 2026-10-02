@@ -29,7 +29,7 @@ K8S_LOG = "/var/log/tklab-k8s.log"
 K8S_COMMAND = [
     "/bin/bash",
     "-c",
-    f"runuser -u {STUDENT_USER} -- bash -lc "
+    f"/usr/sbin/runuser -u {STUDENT_USER} -- bash -lc "
     "'tkctl create cluster tk8s && tkctl use cluster tk8s && tkctl verify cluster tk8s'"
     f" > {K8S_LOG} 2>&1",
 ]

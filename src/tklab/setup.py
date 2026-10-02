@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import config as configmod
 from . import guac as guacmod
+from . import pve as pvemod
 from .config import Config
 
 
@@ -101,12 +102,42 @@ def acl_plan(cfg: Config, nodes: list[str]) -> list[tuple[str, str, str]]:
     return plan
 
 
+def pve_token_works(cfg: Config, *, ca_file: str | None, make_client=None):
+    """A check that a token secret still opens PVE: GET /version needs no privilege at all."""
+    make_client = make_client or pvemod.Pve
+
+    def check(tokenid: str, secret: str) -> bool:
+        try:
+            make_client(cfg.pve.url, f"{USER}!{tokenid}", secret, ca_file=ca_file).request(
+                "GET", "/version"
+            )
+        except pvemod.PveError:
+            return False
+        return True
+
+    return check
+
+
 def reconcile_pve(
-    cfg: Config, admin, env: dict[str, str], *, ca_path: Path
+    cfg: Config,
+    admin,
+    env: dict[str, str],
+    *,
+    ca_path: Path,
+    on_secret=None,
+    token_works=None,
 ) -> tuple[list[Result], dict[str, str]]:
-    """Bring PVE to the state the config describes; returns what happened and new secrets."""
+    """Bring PVE to the state the config describes; returns what happened and new secrets.
+
+    on_secret(dict) is called the moment a token is issued, so a failure later in the run
+    cannot lose a secret PVE will never show again. token_works(tokenid, secret) decides
+    whether a token already in env is kept; without it any present secret is trusted.
+    """
     results: list[Result] = []
     new_env: dict[str, str] = {}
+    nodes = admin.nodes()
+    if not nodes:
+        raise SetupError("no online PVE node; the cluster must be reachable to set it up")
 
     existing = admin.roles()
     for role, privs in ROLES.items():
@@ -135,28 +166,31 @@ def reconcile_pve(
     for tokenid in TOKENS:
         key = TOKEN_ENV[tokenid]
         label = f"token {USER}!{tokenid}"
-        if tokenid in have and env.get(key):
+        secret = env.get(key)
+        if tokenid in have and secret and (token_works is None or token_works(tokenid, secret)):
             results.append((label, "kept"))
             continue
         if tokenid in have:
-            # Its secret is gone for good; a new token is the only way back.
+            # Its secret is gone (or wrong) for good; a new token is the only way back.
             admin.token_remove(USER, tokenid)
         new_env[key] = admin.token_add(USER, tokenid)
+        if on_secret is not None:
+            on_secret({key: new_env[key]})
         results.append((label, "updated" if tokenid in have else "created"))
 
-    nodes = admin.nodes()
-    current = {(a["path"], a["roleid"], a["ugid"]) for a in admin.acl()}
+    current = {(a["path"], a["roleid"], a["ugid"]): int(a.get("propagate", 1)) for a in admin.acl()}
     wanted = acl_plan(cfg, nodes)
     for path, role, who in wanted:
         label = f"acl {path} {role} {who}"
-        if (path, role, who) in current:
+        propagate = current.get((path, role, who))
+        if propagate == 1:
             results.append((label, "kept"))
+            continue
+        if "!" in who:
+            admin.acl_add(path, role, token=who)
         else:
-            if "!" in who:
-                admin.acl_add(path, role, token=who)
-            else:
-                admin.acl_add(path, role, user=who)
-            results.append((label, "created"))
+            admin.acl_add(path, role, user=who)
+        results.append((label, "created" if propagate is None else "updated"))
     ours = set(wanted)
     for a in admin.acl():
         key = (a["path"], a["roleid"], a["ugid"])

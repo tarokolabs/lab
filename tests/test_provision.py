@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import date
 
 import pytest
@@ -492,3 +494,92 @@ def test_auto_node_allow_list_with_no_online_member_is_an_error():
         provision.create(
             cd(["a"]), cfg, FakePve(nodes=("pve-node5",)), FakeGuac(), parallel=1, **QUIET
         )
+
+
+def k8s_cd(names, **kw):
+    c = cd(names, **kw)
+    return classdef.ClassDef(c.name, c.students, c.expires, c.node, k8s=True)
+
+
+def execs(pve):
+    return [c for c in pve.calls if c[0] == "exec"]
+
+
+def test_k8s_runs_tkctl_as_the_student_in_each_vm_after_connecting():
+    pve, guac = FakePve(), FakeGuac()
+    entries = provision.create(k8s_cd(["alice", "bob"]), CFG, pve, guac, parallel=2, **QUIET)
+    assert [e.error for e in entries] == ["", ""]
+    assert sorted(c[1] for c in execs(pve)) == [3100, 3101]
+    (_, _, command) = execs(pve)[0]
+    assert command[:2] == ["/bin/bash", "-c"]
+    script = command[2]
+    assert "runuser -u student" in script
+    assert (
+        "tkctl create cluster tk8s && tkctl use cluster tk8s && tkctl verify cluster tk8s" in script
+    )
+    assert "> /var/log/tklab-k8s.log 2>&1" in script
+    # the cluster is only attempted once the Guacamole side is done (exec after the grant)
+    first_exec = next(i for i, c in enumerate(pve.calls) if c[0] == "exec")
+    assert all(c[0] != "config" for c in pve.calls[first_exec:])
+    # the VM carries a tag so describe can rebuild the definition
+    assert "k8s" in pve.vms[3100]["tags"].split(";")
+
+
+def test_k8s_off_never_execs_and_leaves_no_tag():
+    pve, guac = FakePve(), FakeGuac()
+    provision.create(cd(["alice"]), CFG, pve, guac, parallel=1, **QUIET)
+    assert execs(pve) == [] and "k8s" not in pve.vms[3100]["tags"].split(";")
+
+
+def test_k8s_failure_is_recorded_and_only_that_step_is_redone_on_rerun():
+    pve = FakePve(k8s_exit_for={"lab-k8s-101-alice": 1}, ips={"lab-k8s-101-alice": "10.0.0.5"})
+    guac = FakeGuac()
+    (e,) = provision.create(k8s_cd(["alice"]), CFG, pve, guac, parallel=1, **QUIET)
+    assert e.error == "k8s: exit 1, see /var/log/tklab-k8s.log in the VM"
+    assert e.ip == "10.0.0.5" and e.guac_user == "alice" and e.guac_password and e.vm_password
+    saved = roster.read(roster.path("k8s-101"))[0]
+    assert saved.error.startswith("k8s:") and saved.guac_password == e.guac_password
+    pve.k8s_exit_for.clear()
+    before = len(pve.calls)
+    (again,) = provision.create(k8s_cd(["alice"]), CFG, pve, guac, parallel=1, **QUIET)
+    assert again.error == "" and again.guac_password == e.guac_password and again.ip == "10.0.0.5"
+    assert [c[0] for c in pve.calls[before:]] == ["exec"]
+    assert len(guac.users) == 1 and len(guac.connections) == 2
+
+
+def test_k8s_times_out_and_says_so(monkeypatch):
+    monkeypatch.setattr(provision.time, "sleep", lambda s: None)
+    pve, guac = FakePve(k8s_hold=threading.Event()), FakeGuac()  # never set: never exits
+    (e,) = provision.create(k8s_cd(["alice"]), CFG, pve, guac, parallel=1, **QUIET)
+    assert e.error == (
+        f"k8s: still running after {provision.K8S_TIMEOUT}s, see /var/log/tklab-k8s.log in the VM"
+    )
+
+
+def test_k8s_runs_at_most_two_clusters_per_node_at_once(monkeypatch):
+    monkeypatch.setattr(provision, "K8S_POLL", 0.01)
+    hold = threading.Event()
+    pve, guac = FakePve(k8s_hold=hold), FakeGuac()
+    result = []
+    worker = threading.Thread(
+        target=lambda: result.extend(
+            provision.create(k8s_cd(["a", "b", "c", "d"]), CFG, pve, guac, parallel=4, **QUIET)
+        )
+    )
+    worker.start()
+    deadline = time.monotonic() + 5
+    while len(execs(pve)) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.1)  # give a third exec every chance to slip through
+    assert len(execs(pve)) == 2 and pve.inflight == {"pve-node7": 2}
+    hold.set()
+    worker.join(5)
+    assert [e.error for e in result] == [""] * 4 and pve.max_inflight == {"pve-node7": 2}
+
+
+def test_describe_reads_the_k8s_tag_back():
+    pve, guac = FakePve(), FakeGuac()
+    provision.create(k8s_cd(["alice"]), CFG, pve, guac, parallel=1, **QUIET)
+    assert provision.describe("k8s-101", CFG, pve).k8s is True
+    provision.create(cd(["bob"], name="k8s-102"), CFG, pve, guac, parallel=1, **QUIET)
+    assert provision.describe("k8s-102", CFG, pve).k8s is False

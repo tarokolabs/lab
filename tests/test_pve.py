@@ -381,3 +381,17 @@ def test_migrate_offline_with_local_disks():
     c, op = client({("POST", "/nodes/n1/qemu/3101/migrate"): "UPID:n1:mig"})
     assert c.migrate("n1", 3101, "n2") == "UPID:n1:mig"
     assert op.calls[0][1] == "target=n2&with-local-disks=1"
+
+
+def test_agent_exec_posts_the_command_as_a_list_and_reads_status():
+    routes = {
+        ("POST", "/nodes/n1/qemu/3101/agent/exec"): {"pid": 42},
+        ("GET", "/nodes/n1/qemu/3101/agent/exec-status"): {"exited": 1, "exitcode": 3},
+    }
+    c, op = client(routes)
+    assert c.agent_exec("n1", 3101, ["bash", "-c", "echo hi > /tmp/x"]) == 42
+    assert c.agent_exec_status("n1", 3101, 42) == {"exited": 1, "exitcode": 3}
+    (_, body, _), (_, _, _) = op.calls
+    # PVE takes array parameters as the same key repeated
+    assert body == "command=bash&command=-c&command=echo+hi+%3E+%2Ftmp%2Fx"
+    assert op.calls[1][0] == ("GET", "/nodes/n1/qemu/3101/agent/exec-status")

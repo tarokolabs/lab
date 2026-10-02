@@ -35,6 +35,7 @@ class ClassDef:
     students: tuple[Student, ...]
     expires: date | None = None
     node: str | None = None
+    k8s: bool = False  # create a tk8s cluster in every VM after it is up
 
 
 def vm_name(class_name: str, student: Student) -> str:
@@ -83,6 +84,7 @@ def _build(
     class_vm: dict,
     overrides: dict[str, dict],
     errors: list[str],
+    k8s: bool = False,
 ) -> ClassDef:
     if not isinstance(name, str) or not NAME_RE.match(name):
         errors.append(f"name must match {NAME_RE.pattern}, got {name!r}")
@@ -107,7 +109,7 @@ def _build(
         raise ClassDefError("invalid class definition:\n  " + "\n  ".join(errors))
     assert isinstance(name, str)
     students = tuple(Student(name=n, **specs[n]) for n in names)
-    return ClassDef(name=name, students=students, expires=expires, node=node)
+    return ClassDef(name=name, students=students, expires=expires, node=node, k8s=k8s)
 
 
 def from_flags(
@@ -119,6 +121,7 @@ def from_flags(
     node: str | None,
     cores: int | None,
     memory: int | None,
+    k8s: bool = False,
 ) -> ClassDef:
     errors: list[str] = []
     if not _is_int(count) or count < 1:
@@ -126,7 +129,7 @@ def from_flags(
         count = 0
     class_vm = {k: v for k, v in (("cores", cores), ("memory", memory)) if v is not None}
     names = [f"{i:02d}" for i in range(1, count + 1)]
-    return _build(name, names, _parse_date(expires, errors), node, vm, class_vm, {}, errors)
+    return _build(name, names, _parse_date(expires, errors), node, vm, class_vm, {}, errors, k8s)
 
 
 def from_file(path: Path, *, vm: VmConfig) -> ClassDef:
@@ -170,7 +173,11 @@ def from_file(path: Path, *, vm: VmConfig) -> ClassDef:
         errors.append("node must be a string")
         node = None
     expires = _parse_date(raw.get("expires"), errors)
-    return _build(name, names, expires, node, vm, class_vm, overrides, errors)
+    k8s = raw.get("k8s", False)
+    if not isinstance(k8s, bool):
+        errors.append("k8s must be true or false")
+        k8s = False
+    return _build(name, names, expires, node, vm, class_vm, overrides, errors, k8s)
 
 
 def to_toml(cd: ClassDef) -> str:
@@ -180,6 +187,8 @@ def to_toml(cd: ClassDef) -> str:
         lines.append(f"expires = {cd.expires.isoformat()}")
     if cd.node:
         lines.append(f'node = "{cd.node}"')
+    if cd.k8s:
+        lines.append("k8s = true")
     lines.append("students = [" + ", ".join(f'"{s.name}"' for s in cd.students) + "]")
     # Per-student specs are written in full so the file does not depend on the instructor config.
     for s in cd.students:

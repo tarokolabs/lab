@@ -10,7 +10,7 @@ VM = VmConfig()
 
 
 def flags(name, count, **kw):
-    kw = {"expires": None, "node": None, "cores": None, "memory": None} | kw
+    kw = {"expires": None, "node": None, "cores": None, "memory": None, "k8s": False} | kw
     return classdef.from_flags(name, count, vm=VM, **kw)
 
 
@@ -125,3 +125,23 @@ def test_to_toml_round_trips(tmp_path):
     cd = classdef.from_file(write(tmp_path, text), vm=VM)
     again = classdef.from_file(write(tmp_path, classdef.to_toml(cd)), vm=VM)
     assert again == cd
+
+
+def test_k8s_defaults_off_and_follows_the_flag():
+    assert flags("k8s-101", 1).k8s is False
+    assert flags("k8s-101", 1, k8s=True).k8s is True
+
+
+def test_k8s_from_file_must_be_a_boolean(tmp_path):
+    cd = classdef.from_file(write(tmp_path, 'name = "a"\ncount = 1\nk8s = true\n'), vm=VM)
+    assert cd.k8s is True
+    with pytest.raises(classdef.ClassDefError, match="k8s must be true or false"):
+        classdef.from_file(write(tmp_path, 'name = "a"\ncount = 1\nk8s = "yes"\n'), vm=VM)
+
+
+def test_to_toml_keeps_k8s(tmp_path):
+    cd = flags("k8s-101", 2, k8s=True)
+    text = classdef.to_toml(cd)
+    assert "k8s = true" in text
+    assert classdef.from_file(write(tmp_path, text), vm=VM) == cd
+    assert "k8s = " not in classdef.to_toml(flags("k8s-101", 2))

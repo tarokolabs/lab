@@ -380,3 +380,24 @@ def test_init_403_hint_names_sys_modify(monkeypatch, capsys):
 
     rc, *_ = init([*FLAGS], pve_admin=Forbidden(nodes=["n1"]))
     assert rc == 1 and "Sys.Modify" in capsys.readouterr().err
+
+
+def test_create_k8s_flag_builds_clusters_and_is_exclusive_with_file(env, tmp_path, capsys):
+    rc, pve, _ = run(["create", "class", "k8s-101", "--students", "2", "--k8s"])
+    assert rc == 0
+    assert sorted(c[1] for c in pve.calls if c[0] == "exec") == [3100, 3101]
+    assert "tk8s cluster ready" in capsys.readouterr().out
+    f = tmp_path / "c.toml"
+    f.write_text('name = "k8s-102"\ncount = 1\n')
+    rc, _, _ = run(["create", "class", "-f", str(f), "--k8s"])
+    assert rc == 2 and "cannot be combined" in capsys.readouterr().err
+
+
+def test_create_k8s_from_file_and_describe_toml_keeps_it(env, tmp_path, capsys):
+    f = tmp_path / "c.toml"
+    f.write_text('name = "k8s-103"\ncount = 1\nk8s = true\n')
+    rc, pve, _ = run(["create", "class", "-f", str(f)])
+    assert rc == 0 and [c[1] for c in pve.calls if c[0] == "exec"] == [3100]
+    capsys.readouterr()
+    rc, _, _ = run(["describe", "class", "k8s-103", "-o", "toml"], pve=pve)
+    assert rc == 0 and "k8s = true" in capsys.readouterr().out

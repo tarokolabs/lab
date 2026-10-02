@@ -44,7 +44,10 @@ def _build(base: str, method: str, path: str, params: dict | None) -> urllib.req
     url = f"{base}{path}"
     data = None
     if params:
-        encoded = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+        # a list value becomes the key repeated, which is how PVE takes array parameters
+        encoded = urllib.parse.urlencode(
+            {k: v for k, v in params.items() if v is not None}, doseq=True
+        )
         if method in ("GET", "DELETE"):
             url += "?" + encoded
         else:
@@ -268,6 +271,15 @@ class Pve:
                 raise PveError(504, f"task {upid} did not finish within {timeout}s")
             self.sleep(2)
             elapsed += 2
+
+    def agent_exec(self, node: str, vmid: int, command: list[str]) -> int:
+        """Start `command` inside the guest through qemu-guest-agent; returns its PID."""
+        data = self.request("POST", f"/nodes/{node}/qemu/{vmid}/agent/exec", {"command": command})
+        return int(data["pid"])
+
+    def agent_exec_status(self, node: str, vmid: int, pid: int) -> dict:
+        """{"exited": 0|1, "exitcode": N, ...} for a PID started by agent_exec."""
+        return self.request("GET", f"/nodes/{node}/qemu/{vmid}/agent/exec-status", {"pid": pid})
 
     def agent_ipv4(self, node: str, vmid: int, timeout: int = 300) -> str | None:
         elapsed = 0

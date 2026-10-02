@@ -22,6 +22,17 @@ AGENT_TIMEOUT = 300
 CLONE_TIMEOUT = 300
 FULL_CLONE_TIMEOUT = 900  # a full clone copies the template's data onto the node
 MIN_FREE = 32 * 1024**3  # a node needs this much free on the clone storage to take a VM
+K8S_TIMEOUT = 1200  # a cluster pulls its images from the internet; 20 min covers a slow link
+K8S_POLL = 10
+K8S_PER_NODE = 2  # more clusters at once on one PVE node starve each other during image pulls
+K8S_LOG = "/var/log/tklab-k8s.log"
+K8S_COMMAND = [
+    "/bin/bash",
+    "-c",
+    f"/usr/sbin/runuser -u {STUDENT_USER} -- bash -lc "
+    "'tkctl create cluster tk8s && tkctl use cluster tk8s && tkctl verify cluster tk8s'"
+    f" > {K8S_LOG} 2>&1",
+]
 SIZE_RE = re.compile(r"^(\d+)([KMGT])$")
 UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 
@@ -50,6 +61,8 @@ def _tags(cd: ClassDef) -> str:
     t = ["lab", f"class-{cd.name}"]
     if cd.expires:
         t.append(f"expires-{cd.expires.isoformat()}")
+    if cd.k8s:
+        t.append("k8s")
     return ";".join(t)
 
 
@@ -141,9 +154,16 @@ class _Class:
         self.template_disk = size_bytes(_disk_size(tpl, cfg.vm.disk))
         fixed = cd.node or cfg.pve.node
         self.nodes = _pick_nodes(pve, cfg) if fixed == "auto" else [fixed]
+        self._slots: dict[str, threading.BoundedSemaphore] = {}
+        self._slots_lock = threading.Lock()
 
     def node_for(self, index: int) -> str:
         return self.nodes[index % len(self.nodes)]
+
+    def k8s_slot(self, node: str) -> threading.BoundedSemaphore:
+        """At most K8S_PER_NODE clusters are built at the same time on one PVE node."""
+        with self._slots_lock:
+            return self._slots.setdefault(node, threading.BoundedSemaphore(K8S_PER_NODE))
 
 
 def _entry(s: Student, vmid: int, node: str, ip: str, login: str, err: str, **kw) -> roster.Entry:
@@ -258,6 +278,38 @@ def _connect(c: _Class, s: Student, e: roster.Entry, *, resume: bool) -> roster.
     return _entry(s, e.vmid, e.node, ip, login, "", gp=guac_password, vp=e.vm_password)
 
 
+def _k8s(c: _Class, s: Student, e: roster.Entry) -> roster.Entry:
+    """Build the tk8s cluster inside a connected VM through the guest agent; keeps e's secrets."""
+    name = vm_name(c.cd.name, s)
+
+    def outcome(why: str) -> roster.Entry:
+        return _entry(
+            s, e.vmid, e.node, e.ip, e.guac_user, why, gp=e.guac_password, vp=e.vm_password
+        )
+
+    with c.k8s_slot(e.node):
+        try:
+            pid = c.pve.agent_exec(e.node, e.vmid, K8S_COMMAND)
+            elapsed = 0
+            while True:
+                status = c.pve.agent_exec_status(e.node, e.vmid, pid)
+                if status.get("exited"):
+                    break
+                if elapsed >= K8S_TIMEOUT:
+                    return outcome(
+                        f"k8s: still running after {K8S_TIMEOUT}s, see {K8S_LOG} in the VM"
+                    )
+                c.sleep(K8S_POLL)
+                elapsed += K8S_POLL
+        except PveError as err:
+            return outcome(f"k8s: {err}")
+    code = int(status.get("exitcode", 1))
+    if code:
+        return outcome(f"k8s: exit {code}, see {K8S_LOG} in the VM")
+    c.log(f"{name}: tk8s cluster ready")
+    return outcome("")  # a rerun arrives here carrying the previous attempt's error
+
+
 def _provision_one(
     c: _Class, index: int, s: Student, previous: roster.Entry | None
 ) -> roster.Entry:
@@ -267,6 +319,8 @@ def _provision_one(
             return previous
         if previous is not None and previous.vmid:
             e = previous
+            if previous.error.startswith("k8s:"):
+                return _k8s(c, s, previous)
             if previous.error.startswith("vm setup"):
                 current = e = _setup(c, s, previous)
                 if e.error:
@@ -275,7 +329,10 @@ def _provision_one(
             current = e = _clone_and_start(c, s, c.node_for(index))
             if e.error:
                 return e
-        return _connect(c, s, e, resume=previous is not None)
+        current = e = _connect(c, s, e, resume=previous is not None)
+        if e.error or not c.cd.k8s:
+            return e
+        return _k8s(c, s, e)
     except Exception as err:  # one student's surprise must not sink the class
         vmid = current.vmid if current else 0
         node = current.node if current else c.node_for(index)
@@ -409,6 +466,7 @@ def describe(class_name: str, cfg: Config, pve) -> ClassDef:
     students = []
     exp = None
     nodes = set()
+    k8s = False
     for v in vms:
         c = pve.vm_config(v["node"], v["vmid"])
         students.append(
@@ -423,5 +481,6 @@ def describe(class_name: str, cfg: Config, pve) -> ClassDef:
         e = _tag_value(v, "expires-")
         exp = date.fromisoformat(e) if e else exp
         nodes.add(v["node"])
+        k8s = k8s or "k8s" in tags(v)
     node = nodes.pop() if len(nodes) == 1 else None
-    return ClassDef(class_name, tuple(students), exp, node)
+    return ClassDef(class_name, tuple(students), exp, node, k8s=k8s)

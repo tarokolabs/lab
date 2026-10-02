@@ -1,3 +1,5 @@
+import pytest
+
 from tklab import setup
 from tklab.guac import GuacError
 
@@ -123,3 +125,34 @@ def test_rotates_a_stale_password_instead_of_dying():
     assert by["user tklab"] == "updated" and ("set_password", "tklab") in fake.calls
     assert new_env["TK_LAB_GUAC_PASSWORD"] == fake.users["tklab"] != "stale"
     assert by["totp"] == "kept"
+
+
+def test_admin_session_is_closed_even_when_a_step_fails():
+    fake = FakeGuacAdmin()
+
+    def boom(user, perms):
+        raise GuacError(500, "db down")
+
+    fake.grant_system = boom
+    with pytest.raises(GuacError, match="db down"):
+        run(fake, {})
+    assert ("logout",) in fake.calls
+
+
+def test_service_password_reaches_on_secret_before_anything_else_can_fail():
+    fake = FakeGuacAdmin()
+
+    def boom(user, perms):
+        raise GuacError(500, "db down")
+
+    fake.grant_system = boom
+    stored = []
+    with pytest.raises(GuacError):
+        setup.reconcile_guacamole(
+            cfg(),
+            fake,
+            {},
+            make_client=lambda u, p, s: ServiceClient(fake, u, p, s),
+            on_secret=stored.append,
+        )
+    assert stored == [{"TK_LAB_GUAC_PASSWORD": fake.users["tklab"]}]

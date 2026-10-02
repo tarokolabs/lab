@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import secrets as _secrets
 import shutil
 import string
@@ -11,6 +12,7 @@ from pathlib import Path
 
 from . import config as configmod
 from . import guac as guacmod
+from . import pve as pvemod
 from .config import Config
 
 
@@ -101,12 +103,48 @@ def acl_plan(cfg: Config, nodes: list[str]) -> list[tuple[str, str, str]]:
     return plan
 
 
+def pve_token_works(cfg: Config, *, ca_file: str | None, make_client=None):
+    """A check that a token secret still opens PVE: GET /version needs no privilege at all."""
+    make_client = make_client or pvemod.Pve
+
+    def check(tokenid: str, secret: str) -> bool:
+        try:
+            make_client(cfg.pve.url, f"{USER}!{tokenid}", secret, ca_file=ca_file).request(
+                "GET", "/version"
+            )
+        except pvemod.PveError as e:
+            if e.status in (401, 403):
+                return False
+            raise  # unreachable or broken PVE says nothing about the secret
+        return True
+
+    return check
+
+
 def reconcile_pve(
-    cfg: Config, admin, env: dict[str, str], *, ca_path: Path
+    cfg: Config,
+    admin,
+    env: dict[str, str],
+    *,
+    ca_path: Path,
+    on_secret=None,
+    token_works=None,
+    exported: frozenset[str] = frozenset(),
 ) -> tuple[list[Result], dict[str, str]]:
-    """Bring PVE to the state the config describes; returns what happened and new secrets."""
+    """Bring PVE to the state the config describes; returns what happened and new secrets.
+
+    on_secret(dict) is called the moment a token is issued, so a failure later in the run
+    cannot lose a secret PVE will never show again. token_works(tokenid, secret) decides
+    whether a token already in env is kept; without it any present secret is trusted.
+    `exported` names the keys the shell environment supplies: a rejected secret there is an
+    error, not a reason to rotate, because the new secret would land in the file the
+    exported value keeps overriding.
+    """
     results: list[Result] = []
     new_env: dict[str, str] = {}
+    nodes = admin.nodes()
+    if not nodes:
+        raise SetupError("no online PVE node; the cluster must be reachable to set it up")
 
     existing = admin.roles()
     for role, privs in ROLES.items():
@@ -135,28 +173,37 @@ def reconcile_pve(
     for tokenid in TOKENS:
         key = TOKEN_ENV[tokenid]
         label = f"token {USER}!{tokenid}"
-        if tokenid in have and env.get(key):
-            results.append((label, "kept"))
-            continue
+        secret = env.get(key)
+        if tokenid in have and secret:
+            if token_works is None or token_works(tokenid, secret):
+                results.append((label, "kept"))
+                continue
+            if key in exported:
+                raise SetupError(
+                    f"{key} is set in the environment but PVE rejects it; "
+                    f"unset it (secrets.env holds the tokens init issues) or fix it"
+                )
         if tokenid in have:
-            # Its secret is gone for good; a new token is the only way back.
+            # Its secret is gone (or wrong) for good; a new token is the only way back.
             admin.token_remove(USER, tokenid)
         new_env[key] = admin.token_add(USER, tokenid)
+        if on_secret is not None:
+            on_secret({key: new_env[key]})
         results.append((label, "updated" if tokenid in have else "created"))
 
-    nodes = admin.nodes()
-    current = {(a["path"], a["roleid"], a["ugid"]) for a in admin.acl()}
+    current = {(a["path"], a["roleid"], a["ugid"]): int(a.get("propagate", 1)) for a in admin.acl()}
     wanted = acl_plan(cfg, nodes)
     for path, role, who in wanted:
         label = f"acl {path} {role} {who}"
-        if (path, role, who) in current:
+        propagate = current.get((path, role, who))
+        if propagate == 1:
             results.append((label, "kept"))
+            continue
+        if "!" in who:
+            admin.acl_add(path, role, token=who)
         else:
-            if "!" in who:
-                admin.acl_add(path, role, token=who)
-            else:
-                admin.acl_add(path, role, user=who)
-            results.append((label, "created"))
+            admin.acl_add(path, role, user=who)
+        results.append((label, "created" if propagate is None else "updated"))
     ours = set(wanted)
     for a in admin.acl():
         key = (a["path"], a["roleid"], a["ugid"])
@@ -235,27 +282,41 @@ def _secret_works(client) -> bool:
 
 
 def reconcile_guacamole(
-    cfg: Config, admin, env: dict[str, str], *, make_client
+    cfg: Config, admin, env: dict[str, str], *, make_client, on_secret=None
 ) -> tuple[list[Result], dict[str, str]]:
     """Bring the Guacamole service account to the state the tool needs; returns new secrets.
 
     make_client(username, password, totp_secret) builds a client that logs in as the service
-    account; it is how the TOTP state is discovered and enrolled.
+    account; it is how the TOTP state is discovered and enrolled. on_secret(dict) gets each
+    new secret as soon as it exists on the server. The admin session is closed either way.
     """
+    try:
+        return _reconcile_guacamole(cfg, admin, env, make_client, on_secret)
+    finally:
+        with contextlib.suppress(guacmod.GuacError):  # never mask the real failure
+            admin.logout()
+
+
+def _reconcile_guacamole(cfg, admin, env, make_client, on_secret):
     results: list[Result] = []
     new_env: dict[str, str] = {}
     user = cfg.guacamole.username
     password = env.get("TK_LAB_GUAC_PASSWORD", "")
 
+    def issued(key: str, value: str) -> None:
+        new_env[key] = value
+        if on_secret is not None:
+            on_secret({key: value})
+
     if admin.get_user(user) is None:
         password = new_password()
         admin.create_user(user, password)
-        new_env["TK_LAB_GUAC_PASSWORD"] = password
+        issued("TK_LAB_GUAC_PASSWORD", password)
         results.append((f"user {user}", "created"))
     elif not password:
         password = new_password()
         admin.set_password(user, password)
-        new_env["TK_LAB_GUAC_PASSWORD"] = password
+        issued("TK_LAB_GUAC_PASSWORD", password)
         results.append((f"user {user}", "updated"))
     else:
         results.append((f"user {user}", "kept"))
@@ -281,13 +342,13 @@ def reconcile_guacamole(
         # The password we hold no longer opens the account: it is ours, so rotate it.
         password = new_password()
         admin.set_password(user, password)
-        new_env["TK_LAB_GUAC_PASSWORD"] = password
+        issued("TK_LAB_GUAC_PASSWORD", password)
         slot = next(i for i, (item, _) in enumerate(results) if item == f"user {user}")
         results[slot] = (f"user {user}", "updated")
         state, offered = _totp_state(make_client(user, password, None))
     if state == "none":
         if secret:
-            new_env["TK_LAB_GUAC_TOTP_SECRET"] = ""
+            issued("TK_LAB_GUAC_TOTP_SECRET", "")
             results.append(("totp", "removed"))
         else:
             results.append(("totp", "kept"))
@@ -306,9 +367,8 @@ def reconcile_guacamole(
                     )
             assert offered
             make_client(user, password, offered).enrol(guacmod.totp(offered))
-            new_env["TK_LAB_GUAC_TOTP_SECRET"] = offered
+            issued("TK_LAB_GUAC_TOTP_SECRET", offered)
             results.append(("totp", "updated" if (secret or cleared) else "created"))
-    admin.logout()
     return results, new_env
 
 

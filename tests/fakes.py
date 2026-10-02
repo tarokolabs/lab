@@ -338,6 +338,9 @@ class FakeGuacAdmin:
         self.enrolled_secret = None
         self.calls: list[tuple] = []
 
+    def login(self, totp=None):
+        self.calls.append(("login", totp))
+
     def get_user(self, username):
         return {"username": username, "attributes": {}} if username in self.users else None
 

@@ -11,7 +11,7 @@ ELIGIBLE = {"images", "snippets", "import"}
 
 def _choose(ask_text, question: str, options: list[str], default: str) -> str:
     while True:
-        answer = ask_text(f"{question} [{', '.join(options)}]", default)
+        answer = ask_text(f"{question} ({', '.join(options)})", default)
         if answer in options:
             return answer
         print(f"  choose one of: {', '.join(options)}")
@@ -100,6 +100,8 @@ def ask(*, admin_factory, ask_text, ask_secret, guac_login) -> tuple[Answers, ob
         )
         clone_storage = None if picked == "none" else picked
     nodes = admin.nodes()
+    if not nodes:
+        raise SetupError("no online PVE node; the cluster must be reachable to set it up")
     bridges = admin.bridges(nodes[0]) or [DEFAULTS["bridge"]]
     default_bridge = DEFAULTS["bridge"] if DEFAULTS["bridge"] in bridges else bridges[0]
     bridge = _choose(ask_text, "Bridge", bridges, default_bridge)

@@ -518,9 +518,12 @@ def test_k8s_runs_tkctl_as_the_student_in_each_vm_after_connecting():
         "tkctl create cluster tk8s && tkctl use cluster tk8s && tkctl verify cluster tk8s" in script
     )
     assert "> /var/log/tklab-k8s.log 2>&1" in script
-    # the cluster is only attempted once the Guacamole side is done (exec after the grant)
-    first_exec = next(i for i, c in enumerate(pve.calls) if c[0] == "exec")
-    assert all(c[0] != "config" for c in pve.calls[first_exec:])
+    # per VM, the cluster is only attempted once the VM is configured and connected; students
+    # run in parallel, so another student's config may well land after this one's exec
+    for vmid in (3100, 3101):
+        config_at = next(i for i, c in enumerate(pve.calls) if c[0] == "config" and c[1] == vmid)
+        exec_at = next(i for i, c in enumerate(pve.calls) if c[0] == "exec" and c[1] == vmid)
+        assert config_at < exec_at
     # the VM carries a tag so describe can rebuild the definition
     assert "k8s" in pve.vms[3100]["tags"].split(";")
 

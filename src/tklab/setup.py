@@ -39,6 +39,7 @@ ROLES = {
         "VM.Config.Cloudinit",
         "VM.Config.Disk",
         "VM.GuestAgent.Audit",
+        "VM.GuestAgent.Unrestricted",  # create class --k8s runs tkctl in the VM via agent exec
         "Pool.Audit",  # else /cluster/resources omits the pool field and classes are invisible
         "VM.Migrate",  # a full clone is made next to the template, then moved to its node
     ],

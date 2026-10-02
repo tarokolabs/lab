@@ -143,3 +143,10 @@ def test_acl_plan_and_manual_cover_the_clone_storage():
     assert not any(p[0] == "/storage/local-lvm" and p[2].endswith("tklab-build") for p in plan)
     assert "grant /storage/local-lvm TklabDisk 'lab@pve!tklab'" in setup.manual_pve(local, None)
     assert not any(p[0] == "/storage/local-lvm" for p in setup.acl_plan(c, ["n1"]))
+
+
+def test_only_the_class_role_may_run_commands_in_student_vms():
+    # --k8s runs tkctl inside each VM through the guest agent; exec needs Unrestricted
+    assert "VM.GuestAgent.Unrestricted" in setup.ROLES["TklabClass"]
+    others = {r: p for r, p in setup.ROLES.items() if r != "TklabClass"}
+    assert not any("VM.GuestAgent.Unrestricted" in p for p in others.values())

@@ -177,6 +177,8 @@ class _Init:
             tty = deps.get("ask_secret") is not None or sys.stdin.isatty()
         self.can_ask = tty
         self.fetch = deps.get("fetch") or setup._http_get
+        self.make_token_client = deps.get("make_token_client") or Pve
+        self.written: list[str] = []  # files this run created or changed, for the abort message
         # The CA fetched by an earlier `init pve` (or copied there by hand) works before any config.
         well_known = config.config_path().parent / "pve-root-ca.pem"
         self.ca_file: str | None = str(well_known) if well_known.exists() else None
@@ -192,10 +194,14 @@ class _Init:
 
     def guac_login(self, url: str, user: str, password: str, code: str | None) -> None:
         client = self.make_guac_admin(url, user, password, code)
-        login = getattr(client, "login", None)
-        if login is not None:
-            login(totp=code) if code else login()
+        if code:
+            client.login(totp=code)
+        else:
+            client.login()
         self.guac_admin = client
+
+    def written_summary(self) -> str:
+        return "written so far: " + ", ".join(self.written) if self.written else "nothing written"
 
     def interactive(self) -> setup.Answers:
         answers, _, _ = prompt.ask(
@@ -212,6 +218,14 @@ class _Init:
         args = self.args
         only = args.noun
         flags = {k: getattr(args, k) for k in FLAG_KEYS}
+        if not args.manual and not self.can_ask:
+            # Fail on a missing administrator password before anything is written.
+            for section, var in (
+                ("guacamole", "TK_LAB_PVE_ADMIN_PASSWORD"),
+                ("pve", "TK_LAB_GUAC_ADMIN_PASSWORD"),
+            ):
+                if only != section and not os.environ.get(var):
+                    return _fail(f"set {var} (or run `tklab init` on a terminal)")
         try:
             cfg, state = setup.ensure_config(
                 path=config.config_path(),
@@ -224,6 +238,8 @@ class _Init:
         except setup.SetupError as e:
             return _fail(str(e))
         print(f"config: {state} ({config.config_path()})")
+        if state != "kept":
+            self.written.append(str(config.config_path()))
         self.ca_file = (
             cfg.pve.ca_file if cfg.pve.ca_file and Path(cfg.pve.ca_file).exists() else None
         )
@@ -266,13 +282,24 @@ class _Init:
             except PveError as e:
                 return _fail(f"pve: {e}", 1)
         ca_path = config.config_path().parent / "pve-root-ca.pem"
+        before = len(self.written)
         try:
-            results, new_env = setup.reconcile_pve(cfg, admin, env, ca_path=ca_path)
+            results, _ = setup.reconcile_pve(
+                cfg,
+                admin,
+                env,
+                ca_path=ca_path,
+                on_secret=lambda new: self._store(new, env),
+                token_works=setup.pve_token_works(
+                    cfg, ca_file=self.ca_file, make_client=self.make_token_client
+                ),
+            )
         except PveError as e:
             hint = f" (needs {PVE_ADMIN_PRIVS}; or use --manual)" if e.status == 403 else ""
+            self._announce(before)
             return _fail(f"pve: {e}{hint}", 1)
         _report("pve", results)
-        self._store(new_env, env)
+        self._announce(before)
         return 0
 
     def guacamole(self, cfg, flags, env) -> int:
@@ -301,21 +328,32 @@ class _Init:
                 return _fail(f"guacamole: {e}", 1)
             gadmin = self.guac_admin
         url = cfg.guacamole.url
+        before = len(self.written)
         try:
-            results, new_env = setup.reconcile_guacamole(
-                cfg, gadmin, env, make_client=lambda u, p, s: self.make_service_client(url, u, p, s)
+            results, _ = setup.reconcile_guacamole(
+                cfg,
+                gadmin,
+                env,
+                make_client=lambda u, p, s: self.make_service_client(url, u, p, s),
+                on_secret=lambda new: self._store(new, env),
             )
         except GuacError as e:
+            self._announce(before)
             return _fail(f"guacamole: {e}", 1)
         _report("guacamole", results)
-        self._store(new_env, env)
+        self._announce(before)
         return 0
 
-    @staticmethod
-    def _store(new_env: dict[str, str], env: dict[str, str]) -> None:
+    def _store(self, new_env: dict[str, str], env: dict[str, str]) -> None:
+        """Persist secrets the moment they exist; the server will never show them again."""
         if new_env:
             envfile.write(envfile.path(), new_env)
             env.update(new_env)
+            if str(envfile.path()) not in self.written:
+                self.written.append(str(envfile.path()))
+
+    def _announce(self, before: int) -> None:
+        if len(self.written) > before:
             print(f"wrote {envfile.path()}")
 
 
@@ -443,6 +481,7 @@ def main(
     ask_secret=None,
     fetch=None,
     tty=None,
+    make_token_client=None,
 ) -> int:
     args = build_parser().parse_args(argv)
     if args.verb == "init":
@@ -454,15 +493,17 @@ def main(
             ask_secret=ask_secret,
             fetch=fetch,
             tty=tty,
+            make_token_client=make_token_client,
         )
+        init = _Init(args, deps)
         try:
-            return _Init(args, deps).run()
+            return init.run()
         except config.ConfigError as e:
             return _fail(str(e))
         except (PveError, GuacError) as e:
             return _fail(str(e), 1)
-        except KeyboardInterrupt:
-            print("\naborted; nothing written", file=sys.stderr)
+        except KeyboardInterrupt, EOFError:  # Ctrl-C or Ctrl-D at a question
+            print(f"\naborted; {init.written_summary()}", file=sys.stderr)
             return 1
     try:
         return _dispatch(args, make_clients=make_clients, make_build_client=make_build_client)

@@ -403,3 +403,26 @@ def test_prompt_asks_which_nodes_may_host_student_vms():
     )
     assert a.nodes == ("n2", "n3")
     assert any("student VMs" in q and "n1, n2, n3" in q for q in seen)
+
+
+def test_choose_shows_the_options_once_and_the_default_once():
+    seen = []
+
+    def ask_text(question, default):
+        seen.append((question, default))
+        return default
+
+    assert prompt._choose(ask_text, "Bridge", ["vmbr0", "vmbr1"], "vmbr0") == "vmbr0"
+    ((q, d),) = seen
+    assert q == "Bridge (vmbr0, vmbr1)" and d == "vmbr0"
+    assert "[" not in q  # the asker renders the default in brackets; do not do it twice
+
+
+def test_prompt_refuses_when_no_node_is_online():
+    with pytest.raises(setup.SetupError, match="no online PVE node"):
+        prompt.ask(
+            admin_factory=lambda url, user, pw: FakePveAdmin(nodes=[]),
+            ask_text=lambda q, d: "https://p" if "URL" in q else d,
+            ask_secret=lambda q: "pw",
+            guac_login=lambda *a: None,
+        )

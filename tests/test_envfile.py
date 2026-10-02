@@ -51,3 +51,18 @@ def test_read_tolerates_shell_style_lines(tmp_path):
         "TK_LAB_GUAC_PASSWORD": "quo ted",
         "TK_LAB_PVE_BUILD_TOKEN": "x=y",
     }
+
+
+def test_failed_write_leaves_the_previous_file_untouched(tmp_path, monkeypatch):
+    p = tmp_path / "secrets.env"
+    envfile.write(p, {"TK_LAB_PVE_TOKEN": "old"})
+
+    class Broken:
+        def __init__(self, *a, **k):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(envfile.os, "fdopen", Broken)
+    with pytest.raises(OSError):
+        envfile.write(p, {"TK_LAB_PVE_TOKEN": "new"})
+    assert envfile.read(p) == {"TK_LAB_PVE_TOKEN": "old"}
+    assert [x.name for x in tmp_path.iterdir()] == ["secrets.env"]  # no temp file left behind

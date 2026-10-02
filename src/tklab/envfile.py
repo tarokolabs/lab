@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -52,7 +53,17 @@ def write(p: Path, values: dict[str, str]) -> None:
                 lines[i] = f"{k}={pending.pop(k)}"
     lines += [f"{k}={v}" for k, v in pending.items()]
     p.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write("\n".join(lines) + "\n")
-    os.chmod(p, 0o600)
+    # Write beside the file and rename over it: a crash midway never leaves a half-written
+    # secrets file, and the previous one stays readable until the new one is complete.
+    tmp = p.with_name(p.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        tmp.unlink(missing_ok=True)
+        raise

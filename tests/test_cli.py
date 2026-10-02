@@ -201,12 +201,25 @@ def test_progress_lines_flush_when_stdout_is_a_file():
     assert cli.log.keywords == {"flush": True}
 
 
+class TokenClient:
+    """Stands in for Pve when init checks a kept token: 'stale' is the one secret PVE rejects."""
+
+    def __init__(self, url, token_id, secret, *, ca_file=None):
+        self.secret = secret
+
+    def request(self, method, path, params=None):
+        if self.secret == "stale":
+            raise PveError(401, "invalid token")
+        return {"version": "9.2"}
+
+
 def init(argv, *, pve_admin=None, guac_admin=None, text=(), secrets=(), tty=True):
     pve_admin = pve_admin or FakePveAdmin(nodes=["n1"])
     guac_admin = guac_admin or FakeGuacAdmin()
     t, s = iter(text), iter(secrets)
     rc = cli.main(
         ["init", *argv],
+        make_token_client=TokenClient,
         make_admin=lambda url, user, pw, ca_file=None: pve_admin,
         make_guac_admin=lambda url, user, pw, totp: guac_admin,
         make_service_client=lambda url, u, p, secret: ServiceClient(guac_admin, u, p, secret),
@@ -401,3 +414,84 @@ def test_create_k8s_from_file_and_describe_toml_keeps_it(env, tmp_path, capsys):
     capsys.readouterr()
     rc, _, _ = run(["describe", "class", "k8s-103", "-o", "toml"], pve=pve)
     assert rc == 0 and "k8s = true" in capsys.readouterr().out
+
+
+def test_init_without_admin_password_fails_before_writing_the_config(capsys):
+    rc, *_ = init(FLAGS, tty=False)
+    assert rc == 2 and "TK_LAB_PVE_ADMIN_PASSWORD" in capsys.readouterr().err
+    assert not config.config_path().exists()
+
+
+def test_init_guacamole_only_without_its_password_fails_before_writing_the_config(capsys):
+    rc, *_ = init(["guacamole", *FLAGS], tty=False)
+    assert rc == 2 and "TK_LAB_GUAC_ADMIN_PASSWORD" in capsys.readouterr().err
+    assert not config.config_path().exists()
+
+
+def test_init_abort_message_names_what_was_written(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    asked = []
+
+    def guac_password(q):
+        asked.append(q)
+        raise KeyboardInterrupt
+
+    pve_admin = FakePveAdmin(nodes=["n1"])
+    rc = cli.main(
+        ["init", *FLAGS, "--node", "n1"],
+        make_token_client=TokenClient,
+        make_admin=lambda url, user, pw, ca_file=None: pve_admin,
+        make_guac_admin=lambda url, user, pw, totp: FakeGuacAdmin(),
+        ask_text=lambda q, d: d,
+        ask_secret=guac_password,
+        fetch=lambda url: SUMS,
+        tty=True,
+    )
+    err = capsys.readouterr().err
+    assert rc == 1 and asked == ["Password for guacadmin"]  # interrupted at the Guacamole step
+    assert "nothing written" not in err
+    assert str(config.config_path()) in err and "secrets.env" in err
+
+
+def test_init_ctrl_d_aborts_like_ctrl_c(capsys):
+    def eof(q, d):
+        raise EOFError
+
+    rc = cli.main(["init"], ask_text=eof, ask_secret=lambda q: "x")
+    assert rc == 1 and not config.config_path().exists()
+    assert "aborted; nothing written" in capsys.readouterr().err
+
+
+def test_init_keeps_secrets_issued_before_a_later_pve_failure(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    pve_admin = FakePveAdmin(nodes=["n1"])
+
+    def acl_add(*a, **k):
+        raise PveError(403, "Permission check failed")
+
+    pve_admin.acl_add = acl_add
+    rc, *_ = init([*FLAGS, "--node", "n1"], pve_admin=pve_admin)
+    assert rc == 1
+    from tklab import envfile
+
+    assert set(envfile.read(envfile.path())) == {"TK_LAB_PVE_TOKEN", "TK_LAB_PVE_BUILD_TOKEN"}
+
+
+def test_init_replaces_a_kept_token_that_pve_rejects(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
+    monkeypatch.setenv("TK_LAB_PVE_TOKEN", "stale")
+    pve_admin = FakePveAdmin(
+        users=["lab@pve"], tokens={"lab@pve": {"tklab", "tklab-build"}}, nodes=["n1"]
+    )
+    rc, *_ = init([*FLAGS, "--node", "n1"], pve_admin=pve_admin)
+    out = capsys.readouterr().out
+    assert rc == 0 and "token lab@pve!tklab: updated" in out
+    assert ("token_remove", "lab@pve", "tklab") in pve_admin.calls
+
+
+def test_init_logs_the_guacamole_admin_in_for_real(monkeypatch, capsys):
+    monkeypatch.setenv("TK_LAB_PVE_ADMIN_PASSWORD", "p")
+    monkeypatch.setenv("TK_LAB_GUAC_ADMIN_PASSWORD", "g")
+    rc, _, guac_admin = init([*FLAGS, "--node", "n1"])
+    assert rc == 0 and guac_admin.calls[0] == ("login", None)
